@@ -3,7 +3,27 @@ from config import *  # 导入你之前定义的颜色常量
 
 
 class AzulGame:
-    def __init__(self, num_players = 2):
+    def __init__(self, num_players=2):
+        # 实例化公共版图
+        self.public_board = PublicBoard(num_players)
+
+        # 实例化玩家版图（如果是2人局，列表里就有2个 PlayerBoard 对象）
+        self.players = [PlayerBoard(i) for i in range(num_players)]
+
+        # 记录轮到谁了
+        self.current_player_idx = 0
+
+    def start_round(self):
+        # 喊公共版图去补货
+        self.public_board.refill_factories()
+
+    def get_current_player(self):
+        return self.players[self.current_player_idx]
+
+
+class PublicBoard:
+    def __init__(self, num_players=2):
+
         # 1. 初始化布袋 (Bag)
         self.bag = []
         self._init_bag()
@@ -61,3 +81,24 @@ class AzulGame:
         print(f"桌面中心: {self.center}")
         print(f"布袋剩余: {len(self.bag)} 块")
         print("=" * 20 + "\n")
+
+
+class PlayerBoard:
+    def __init__(self, player_id):
+        self.player_id = player_id
+        self.score = 0
+
+        # 待修行 (Pattern Lines): 5行，第一行1格，第五行5格
+        # 我们用列表表示：[[0], [0,0], [0,0,0], ...]
+        self.pattern_lines = [[EMPTY] * (i + 1) for i in range(5)]
+
+        # 墙面 (Wall): 5x5 的矩阵，记录哪一格贴了砖
+        self.wall = [[False] * 5 for _ in range(5)]
+
+        # 地板/碎砖区 (Floor): 最多掉落 7 块
+        self.floor = []
+
+    def add_tiles_to_line(self, line_idx, color, count):
+        # 将拿到的砖放入某一行，多余的掉到地板
+        # 这里的逻辑：检查颜色是否匹配、是否已满、是否墙上已有该颜色...
+        pass
