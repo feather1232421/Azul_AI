@@ -3,14 +3,19 @@ from config import *  # 导入你之前定义的颜色常量
 
 
 class AzulGame:
-    def __init__(self):
+    def __init__(self, num_players = 2):
         # 1. 初始化布袋 (Bag)
         self.bag = []
         self._init_bag()
 
         # 2. 初始化工厂盘 (Factories)
         # 5个工厂，每个工厂4个空格，初始全为空 (EMPTY=0)
-        self.factories = [[EMPTY] * TILES_PER_FACTORY for _ in range(FACTORY_COUNT)]
+        # 自动根据人数设定工厂数
+        self.num_players = num_players
+        self.factory_count = PLAYER_FACTORY_MAP.get(num_players, 5)  # 如果没查到，默认5个
+
+        # 剩下的初始化也要跟着变
+        self.factories = [[EMPTY] * TILES_PER_FACTORY for _ in range(self.factory_count)]
 
         # 3. 初始化桌面中心 (Center Area)
         # 初始只有先手标记 (FIRST_PLAYER=6)
@@ -28,7 +33,7 @@ class AzulGame:
 
     def refill_factories(self):
         # 回合开始：从布袋给工厂补货
-        for i in range(FACTORY_COUNT):
+        for i in range(self.factory_count):
             for j in range(TILES_PER_FACTORY):
                 if not self.bag:
                     # 如果袋子空了，把弃牌堆洗回去
