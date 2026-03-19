@@ -1,16 +1,11 @@
-# This is a sample Python script.
+from logic import AzulGame
 
-# Press Shift+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
+if __name__ == "__main__":
+    # 1. 创建游戏实例
+    my_game = AzulGame()
 
+    # 2. 执行发牌
+    my_game.refill_factories()
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press Ctrl+F8 to toggle the breakpoint.
-
-
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    # 3. 打印场面
+    my_game.display_status()
