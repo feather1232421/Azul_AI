@@ -19,3 +19,11 @@ PLAYER_FACTORY_MAP = {
 TILES_PER_FACTORY = 4  # 每个板子上最多放4块砖
 COLOR_COUNT = 5    # 除去先手牌共有5种颜色
 BAG_INITIAL_COUNT = 20  # 每种颜色20块
+
+
+def color_to_column(row_idx, color):
+    """
+    已知行号和颜色，计算在墙面 5x5 矩阵里的列号
+    公式：(color_id - 1 + row_idx) % 5
+    """
+    return (color - 1 + row_idx) % 5
