@@ -1,40 +1,57 @@
 from logic import AzulGame
+from ai import RandomAgent, GreedyAgent, HumanAgent
 
 
 def main():
-    # 1. 初始化游戏
     game = AzulGame(num_players=2)
-    print("🎮 Azul AI 引擎 (MVP版) 启动！")
+    agent1 = HumanAgent()
+    agent2 = GreedyAgent()
+    round_count = 1
 
-    # 2. 回合开始：发牌
-    game.public_board.refill_factories()
+    while not game.is_game_over():
+        print(f"\n第 {round_count} 轮开始！")
+        game.start_round()
+        print(game.get_observation_current())
+        sample_vector = game.state_to_vector(game.get_observation_current())
+        print(f"我的 AI 视网膜长度是: {len(sample_vector)}")
+        print("合法的行动有：")
+        print(game.get_legal_moves())
+        # 拿砖阶段
+        while not game.public_board.is_empty():
+            curr_player_idx = game.current_player_idx
+            agent = agent1 if curr_player_idx == 0 else agent2
 
-    # 3. 游戏主循环 (直到这轮砖被拿光)
-    while not game.public_board.is_empty():
-        game.public_board.display_status()
-        curr_idx = game.current_player_idx
-        print(f"👉 当前回合：玩家 {curr_idx}")
+            # 1. 记录动作前状态 (可选)
+            if curr_player_idx == 0:
+                game.display_all_info()
+            action = agent.decide(game)
+            f_idx, col, row = action
 
-        try:
-            # 这里的输入约定：工厂号(-1代表中心) 颜色 行号
-            user_input = input("请输入动作 [工厂号(-1为中心) 颜色 行号]: ")
-            f_idx, col, row = map(int, user_input.split())
+            # 2. 格式化打印动作
+            source_name = f"工厂 {f_idx}" if isinstance(f_idx, int) else "桌面中心"
+            row_name = f"第 {row} 行" if row < 5 else "掉落地板"
+            print(f"🤖 玩家 {curr_player_idx} 执行动作: 从 [{source_name}] 拿颜色 {col} 放入 [{row_name}]")
 
-            # 转换 -1 为 "center"
-            source = "center" if f_idx == -1 else f_idx
+            # 3. 执行
+            game.play_turn(*action)
 
-            # 执行动作
-            success = game.play_turn(source, col, row)
+            # 4. 打印即时反馈
+            p = game.players[curr_player_idx]
+            print(f"   此时该行状态: {p.pattern_lines[row] if row < 5 else p.floor}")
 
-            if success:
-                # 打印一下该玩家现在的 Pattern Lines 状态
-                print(f"✅ 玩家 {curr_idx} 的待修行行：{game.players[curr_idx].pattern_lines}")
-                print(f"📉 地板扣分区：{game.players[curr_idx].floor}")
+        # 计分阶段
+        print(f"--- 第 {round_count} 轮结束，开始计分 ---")
+        for p in game.players:
+            p.tiling_and_scoring(game.public_board.discard_pile)
+            print(f"玩家 {p.player_id} 当前总分: {p.score}")
 
-        except Exception as e:
-            print(f"❌ 输入错误或非法操作: {e}，请重新输入！")
+        round_count += 1
+        if round_count > 20:  # 安全阀，防止随机 AI 永远玩不完
+            break
+    for p in game.players:
+        p.endgame_scoring()
 
-    print("\n🏁 这一轮的砖拿光了！MVP 流程演示结束。")
+    print("🏆 游戏正式结束！最终得分：", [p.score for p in game.players])
 
 
 if __name__ == "__main__":

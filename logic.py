@@ -1,14 +1,16 @@
 import random
 from config import *  # 导入你之前定义的颜色常量
+import torch
+import numpy as np
 
 
 class AzulGame:
     def __init__(self, num_players=2, first_player=None):
         # 实例化公共版图
         self.public_board = PublicBoard(num_players)
-
+        self.num_players = num_players
         # 实例化玩家版图（如果是2人局，列表里就有2个 PlayerBoard 对象）
-        self.players = [PlayerBoard(i) for i in range(num_players)]
+        self.players = [PlayerBoard(i) for i in range(self.num_players)]
         if first_player is not None:
             self.first_player = first_player
         else:
@@ -23,41 +25,56 @@ class AzulGame:
     def start_round(self):
         # 喊公共版图去补货
         self.public_board.refill_factories()
+        self.first_player = self.next_round_first_player
+        self.next_round_first_player = None
 
     def get_current_player(self):
         return self.players[self.current_player_idx]
 
+    # 在 AzulGame.play_turn 中
     def play_turn(self, source, color, target_row):
-        """
-        MVP 核心动作：
-        source: 工厂索引 (0-4) 或 "center"
-        color: 颜色编号 (1-5)
-        target_row: 玩家想放哪一行 (0-4)
-        """
         player = self.players[self.current_player_idx]
 
-        # 1. 从公共区拿砖
-        count, got_first = self.public_board.pick_tiles(source, color)
-
+        # 1. 先问公共板：有货吗？
+        count, _ = self.public_board.preview_pick(source, color)
         if count == 0:
-            print("⚠ 那个位置没有这种颜色的砖！请重新输入。")
             return False
 
-        # 2. 处理先手牌
+        # 2. 再问玩家：能放吗？
+        if not player.can_accept(color, target_row):
+            print("玩家表示：这砖我没法放这儿！")
+            return False
+
+        # 3. 检查都过了，正式开始“原子化”操作
+        # ... 执行真正的 pick 和 add ...
+        # 1. 取砖逻辑不变
+        count, got_first = self.public_board.pick_tiles(source, color)
+
         if got_first:
             player.receive_first_player_marker()
             self.next_round_first_player = self.current_player_idx
-            print(f"✨ 玩家 {self.current_player_idx} 拿到了先手标记！")
 
-        # 3. 放入玩家版图
-        player.add_tiles_to_line(target_row, color, count)
-
-        # 4. 换下一个人
+        # 2. 【关键修复】判定 target_row
+        if target_row == 5:
+            # 如果是 5，代表 AI 决定直接扔进地板
+            player.floor.extend([color] * count)
+        else:
+            # 否则，才是正常的放砖逻辑
+            player.add_tiles_to_line(target_row, color, count)
+        # 换下一个人
         self.current_player_idx = (self.current_player_idx + 1) % len(self.players)
         return True
 
     def is_round_over(self):
         return self.public_board.is_empty()
+
+    def is_game_over(self):
+        for player in self.players:
+            for row in range(5):
+                # 如果某一行全为 True，说明连成一线了
+                if all(player.wall[row]):
+                    return True
+        return False
 
     def get_legal_moves(self):
         moves = []
@@ -101,6 +118,84 @@ class AzulGame:
                 moves.append((src, col, 5))
 
         return moves
+
+    def display_all_info(self):
+        print("\n" + "=" * 30)
+        print(f"🚩 当前回合：玩家 {self.current_player_idx}")
+        print("=" * 30)
+
+        self.public_board.display_status()
+        for i in range(self.num_players):
+            # 如果是当前玩家，加个小星星标识
+            prefix = "⭐️ " if i == self.current_player_idx else "  "
+            print(f"{prefix}玩家 {i} 的状态：")
+            self.players[i].display_board()
+
+    def get_observation_current(self):
+        # 确定当前轮到谁
+        me_idx = self.current_player_idx
+
+        # 重新排列玩家列表：第一个永远是“我”，后面是“其他人”
+        # 比如 3 人局，轮到 1 号动，列表就是 [Player1, Player2, Player0]
+        sorted_players = [self.players[me_idx]] + \
+                         [self.players[i] for i in range(self.num_players) if i != me_idx]
+
+        state = {
+            "factories": self.public_board.factories,
+            "center": self.public_board.center,
+            "me": sorted_players[0].to_dict(),  # 给 PlayerBoard 加个转字典的方法
+            "opponents": [p.to_dict() for p in sorted_players[1:]]
+        }
+        return state
+
+    def state_to_vector(self, state):
+        # state 就是你刚才打印的那个大字典
+        features = []
+
+        # 1. 处理工厂 (Factories): 5个工厂 * 4个位置 = 20个数字
+        for factory in state['factories']:
+            features.extend(factory)
+
+        # 2. 处理中心 (Center): 统计法
+        # 因为中心区长度变动，AI 没法处理，所以我们统计 1-6 每种颜色有多少个
+        center_counts = [0] * 6  # 索引0-4是颜色1-5，索引5是先手牌6
+        for tile in state['center']:
+            center_counts[tile - 1] += 1
+        features.extend(center_counts)
+
+        # 3. 处理“我” (Me):
+        me = state['me']
+        # 墙面 (Wall): 5x5 = 25个 0/1
+        for row in me['wall']:
+            features.extend([1 if cell else 0 for cell in row])
+        # 待修行行 (Pattern Lines): 补齐成 5x5 = 25个数字
+        for i, line in enumerate(me['pattern_lines']):
+            # 这一行有几个，是什么颜色？
+            # 补齐：比如第一行只有1位，补4个0
+            padded_line = line + [0] * (5 - len(line))
+            features.extend(padded_line)
+        # 分数和地板 (Floor)
+        features.append(me['score'])
+        # 地板我们也补齐到 7 位（因为地板最多7位）
+        padded_floor = (me['floor'] + [0] * 7)[:7]
+        features.extend(padded_floor)
+
+        # 4. 处理“对手” (Opponents):
+        # 为了固定长度，我们假设最多支持 1 个对手（2人局）
+        # 如果是多人局，就用循环处理前 N 个对手
+        for opp in state['opponents']:
+            # 同样的逻辑：墙面 + 行 + 分数 + 地板
+            for row in opp['wall']:
+                features.extend([1 if cell else 0 for cell in row])
+            for i, line in enumerate(opp['pattern_lines']):
+                padded_line = line + [0] * (5 - len(line))
+                features.extend(padded_line)
+            features.append(opp['score'])
+            padded_floor = (opp['floor'] + [0] * 7)[:7]
+            features.extend(padded_floor)
+
+        # 最后转化成 NumPy 数组，这是转 PyTorch Tensor 的前置步
+        return np.array(features, dtype=np.float32)
 
 
 class PublicBoard:
@@ -147,6 +242,7 @@ class PublicBoard:
 
     def refill_factories(self):
         # 回合开始：从布袋给工厂补货
+        self.center = [FIRST_PLAYER]
         for i in range(self.factory_count):
             for j in range(TILES_PER_FACTORY):
                 if not self.bag:
@@ -161,7 +257,7 @@ class PublicBoard:
 
     def _recycle_discard(self):
         # 回收弃牌堆逻辑
-        print("--- 布袋已空，正在回收弃牌堆 ---")
+        # print("--- 布袋已空，正在回收弃牌堆 ---")
         self.bag = self.discard_pile[:]
         self.discard_pile = []
         random.shuffle(self.bag)
@@ -206,6 +302,30 @@ class PublicBoard:
 
         return picked_count, got_first_player
 
+    # 在 PublicBoard 类内部添加
+    def preview_pick(self, source, color):
+        """
+        预检：返回如果从 source 拿 color，能拿到多少块，以及是否含先手牌。
+        此函数不修改任何成员变量（不 pop，不改 center）。
+        """
+        count = 0
+        got_first = False
+
+        if source == "center":
+            # 1. 数颜色砖
+            count = self.center.count(color)
+            # 2. 检查是否有先手牌
+            if FIRST_PLAYER in self.center:
+                got_first = True
+        else:
+            # source 是工厂索引，直接看那个工厂里有多少个该颜色
+            # 假设你的工厂是一个列表，如 [1, 1, 0, 2]
+            factory = self.factories[source]
+            count = factory.count(color)
+            got_first = False  # 工厂里永远不会有先手牌
+
+        return count, got_first
+
 
 class PlayerBoard:
     def __init__(self, player_id):
@@ -222,17 +342,21 @@ class PlayerBoard:
         # 地板/碎砖区 (Floor): 最多掉落 7 块
         self.floor = []
 
-    def display_status(self):
-        # 在控制台打印当前场面，方便调试
-        print("\n" + "=" * 20)
-        print(f"{self.player_id} 号玩家个人盘面：")
-        for i, f in enumerate(self.pattern_lines):
-            print(f"第 {i} 行: {f}")
-        for i, f in enumerate(self.wall):
-            print(f"第 {i} 行: {f}")
-        print(f"个人地板: {self.floor}")
-        print(f"个人分数: {self.score} 分")
-        print("=" * 20 + "\n")
+    def display_board(self):
+        print(f"\n--- 玩家 {self.player_id} 的个人板图 ---")
+        print("待修行 (Pattern Lines):")
+        for i, line in enumerate(self.pattern_lines):
+            # 用空格补齐，让它看起来像个三角形
+            spaces = " " * (4 - i)
+            print(f"{i}: {spaces}{line}")
+
+        print("墙面 (Wall):")
+        for row in self.wall:
+            # 把 True 变成 'X'，False 变成 '.'
+            row_str = " ".join(['X' if cell else '.' for cell in row])
+            print(f"   [{row_str}]")
+
+        print(f"地板扣分: {self.floor} | 当前得分: {self.score}")
 
     def add_tiles_to_line(self, line_idx, color, count):
         # 1. 检查这一行是否已经有了别的颜色
@@ -264,10 +388,48 @@ class PlayerBoard:
         self.floor.append(FIRST_PLAYER)
         # 以后如果你想加逻辑，比如“拿了先手牌会触发某个技能”，改这里就行
 
+    def calculate_move_score(self, row, col):
+        """
+        当一块砖贴在 (row, col) 时，计算它的即时得分
+        """
+        # 1. 横向扫描 (Horizontal)
+        h_score = 1
+        # 往左看
+        c = col - 1
+        while c >= 0 and self.wall[row][c]:
+            h_score += 1
+            c -= 1
+        # 往右看
+        c = col + 1
+        while c < 5 and self.wall[row][c]:
+            h_score += 1
+            c += 1
+
+        # 2. 纵向扫描 (Vertical)
+        v_score = 1
+        # 往上看
+        r = row - 1
+        while r >= 0 and self.wall[r][col]:
+            v_score += 1
+            r -= 1
+        # 往下看
+        r = row + 1
+        while r < 5 and self.wall[r][col]:
+            v_score += 1
+            r += 1
+
+        # 3. 特殊规则：
+        # 如果横向和纵向都超过1块（即形成了十字），这块砖被算了两次，得分 = h + v
+        # 如果只有孤零零的一块，得分 = 1
+        if h_score > 1 and v_score > 1:
+            return h_score + v_score
+        else:
+            # 如果只有单向连号，取大的那个（如果都不连，h和v都是1）
+            return max(h_score, v_score)
+
     def tiling_and_scoring(self, discard_pile):
 
         # discard_pile: 传入公共区的弃牌堆，要把剩下的砖扔回去
-
         for i in range(5):
             # 1. 检查这一行是否满了（最后一个位置不是 EMPTY）
             row = self.pattern_lines[i]
@@ -278,8 +440,10 @@ class PlayerBoard:
                 # 2. 贴砖到墙上
                 self.wall[i][col_idx] = True
 
-                # 3. 【核心】计算得分（暂时只算基础分，后面教你算连号分）
-                self.score += 1
+                # 3. 【核心】计算得分
+                # 再算连号分 (调用刚才写的那个函数)
+                move_points = self.calculate_move_score(i, col_idx)
+                self.score += move_points
 
                 # 4. 清理当前行：留下一块，剩下的进弃牌堆
                 # 这一行除了被拿走的那块，剩下的都要回收
@@ -299,6 +463,66 @@ class PlayerBoard:
         self.floor = []
         self.score = max(0, self.score)
 
+    def endgame_scoring(self):
+        # 填满横行 +2 分
+        for i in range(5):
+            for j in range(5):
+                if not self.wall[i][j]:
+                    break
+            else:
+                self.score += 2
 
+        # 填满竖列 +7 分
+        for i in range(5):
+            for j in range(5):
+                if not self.wall[j][i]:
+                    break
+            else:
+                self.score += 7
 
+        # --- 填满全部颜色 (+10 分) ---
+        color_counts = [0] * 5  # 假设颜色编号是 1-5，对应索引 0-4
+        for r in range(5):
+            for c in range(5):
+                if self.wall[r][c]:
+                    # 获取该位置对应的颜色
+                    # 提示：花砖的墙面颜色通常是 (c - r) % 5
+                    # 或者你有一个现成的 color_map[r][c]
+                    color = color_map[r][c]
+                    color_counts[color - 1] += 1
 
+        for count in color_counts:
+            if count == 5:
+                self.score += 10
+
+    # 在 PlayerBoard 类中
+    def can_accept(self, color, target_row):
+        """
+        玩家版图的自我检查：我不动数据，只告诉你行不行。
+        """
+        if target_row == 5:  # 地板永远能接
+            return True
+
+        line = self.pattern_lines[target_row]
+        # 规则 1：颜色匹配或为空
+        if any(t != EMPTY and t != color for t in line):
+            return False
+        # 规则 2：墙上没贴过
+        col_idx = color_to_column(target_row, color)
+        if self.wall[target_row][col_idx]:
+            return False
+
+        # 规则 3：这行没满（虽然满了也可以拿，但通常视为非法或直接掉地板，看你规则定死没）
+        if EMPTY not in line:
+            return False
+
+        return True
+
+    def to_dict(self):
+        state = {
+            "pattern_lines":self.pattern_lines,
+            "wall": self.wall,
+            "floor": self.floor,
+            "score": self.score,
+        }
+        return state
