@@ -16,16 +16,16 @@ PLAYER_FACTORY_MAP = {
     4: 9
 }
 
-TILES_PER_FACTORY = 4  # 每个板子上最多放4块砖
-COLOR_COUNT = 5    # 除去先手牌共有5种颜色
+TILES_PER_FACTORY = 4   # 每个板子上最多放4块砖
+COLOR_COUNT = 5         # 除去先手牌共有5种颜色
 BAG_INITIAL_COUNT = 20  # 每种颜色20块
 
 
 # 生成所有可能的组合 (6个来源 x 5个颜色 x 6个目标行)
 ACTION_LOOKUP = []
 for src in ["center", 0, 1, 2, 3, 4]:
-    for col in range(1, 6): # 颜色 1-5
-        for row in range(0, 6): # 行 0-4 是墙，5 是地板
+    for col in range(1, 6):  # 颜色 1-5
+        for row in range(0, 6):  # 行 0-4 是墙，5 是地板
             ACTION_LOOKUP.append((src, col, row))
 
 

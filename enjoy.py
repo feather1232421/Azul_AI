@@ -1,14 +1,14 @@
 import time
 import os
 from sb3_contrib import MaskablePPO
-from train import AzulEnv
+from environment import AzulEnv
 from config import ACTION_LOOKUP
 
 
 def enjoy():
     env = AzulEnv()
     # 🌟 自动寻找最新的模型
-    model_path = "azul_ppo_v2.zip"  # 或者 models/ 里的最新文件
+    model_path = "azul_ppo_v6.zip"  # 或者 models/ 里的最新文件
     if not os.path.exists(model_path):
         print("没找到模型文件！")
         return
@@ -30,7 +30,7 @@ def enjoy():
         print(f"当前得分: {env.game.players[0].score} | 奖励反馈: {reward:.2f}")
 
         # 如果你想看更详细的墙面，可以把 wall 打印出来
-        # print(env.game.players[0].wall)
+        print(env.game.players[0].wall)
 
         if terminated or truncated:
             print("🏁 比赛结束！")

@@ -2,36 +2,78 @@ import random
 from config import *  # 导入你之前定义的颜色常量
 import torch
 import numpy as np
+import copy
 
 
 class AzulGame:
-    def __init__(self, num_players=2, first_player=None):
-        # 实例化公共版图
-        self.public_board = PublicBoard(num_players)
+    def __init__(self, num_players=2, first_player=None, auto_init=True):
         self.num_players = num_players
+        self.first_player = first_player
+        self.next_round_first_player = None
+        self.current_player_idx = None
+        if auto_init:
+            self._init_game()
+
+    def _init_game(self):
+        # 实例化公共版图
+        self.public_board = PublicBoard(self.num_players)
         # 实例化玩家版图（如果是2人局，列表里就有2个 PlayerBoard 对象）
         self.players = [PlayerBoard(i) for i in range(self.num_players)]
-        if first_player is not None:
-            self.first_player = first_player
-        else:
-            # 假设玩家编号是 0 和 1 (符合编程习惯)
-            # randint(0, 1) 会随机返回 0 或 1
-            self.first_player = random.randint(0, num_players - 1)
-
-            # 既然随机出了首通玩家，初始回合就该从他开始
+        self.first_player = random.randint(0, self.num_players - 1)
+        # 初始回合就该从首位开始
         self.current_player_idx = self.first_player
         self.next_round_first_player = None
+        self.start_round()
+
+    def reset(self):
+        self._init_game()
+
+    def advance_until_next_decision(self, agents_dict):
+        # 自动运行游戏，直到轮到需要人工/AI决策的玩家，或者游戏结束。
+        # agents_dict: 字典，key 是 player_id, value 是 agent 实例 (必须有 decide 方法)
+        while not self.is_game_over():
+            # 1. 检查当前玩家是否在“自动执行”名单里
+            curr_id = self.current_player_idx
+            # 如果当前玩家不在自动执行名单（比如是我们的 AI），停止并交还控制权
+            if curr_id not in agents_dict:
+                # 注意：如果这轮拿光了，得先结算才能判断下一轮谁先手
+                if self.is_round_over():
+                    self._internal_scoring_flow()
+                    continue  # 结算完重新判定 current_player_idx
+                break
+
+            # 2. 处理轮次结束
+            if self.is_round_over():
+                self._internal_scoring_flow()
+                continue
+
+            # 3. 执行自动玩家的动作
+            agent = agents_dict[curr_id]
+            move = agent.decide(self)  # Greedy 就在这里发威
+            # self.analyze_moves()
+            self.play_turn(*move)
+
+    def _internal_scoring_flow(self):
+        """把计分和开新局的逻辑包起来"""
+        for p in self.players:
+            p.tiling_and_scoring(self.public_board.discard_pile)
+
+        if not self.is_game_over():
+            self.start_round()  # 重新补砖
+        else:
+            for p in self.players:
+                p.endgame_scoring()
 
     def start_round(self):
         # 喊公共版图去补货
         self.public_board.refill_factories()
-        self.first_player = self.next_round_first_player
+        if self.next_round_first_player:
+            self.first_player = self.next_round_first_player
         self.next_round_first_player = None
 
     def get_current_player(self):
         return self.players[self.current_player_idx]
 
-    # 在 AzulGame.play_turn 中
     def play_turn(self, source, color, target_row):
         player = self.players[self.current_player_idx]
 
@@ -39,14 +81,20 @@ class AzulGame:
         count, _ = self.public_board.preview_pick(source, color)
         if count == 0:
             return False
-
+        assert count != 0, "PublicBoard check failed"
         # 2. 再问玩家：能放吗？
         if not player.can_accept(color, target_row):
             print("玩家表示：这砖我没法放这儿！")
             return False
+        assert player.can_accept(color, target_row), "PlayerBoard check failed"
 
         # 3. 检查都过了，正式开始“原子化”操作
+
         # ... 执行真正的 pick 和 add ...
+        self._apply_move(source, color, target_row)
+
+    def _apply_move(self,source, color, target_row):
+        player = self.players[self.current_player_idx]
         # 1. 取砖逻辑不变
         count, got_first = self.public_board.pick_tiles(source, color)
 
@@ -148,6 +196,20 @@ class AzulGame:
         }
         return state
 
+    # 在 logic.py 中增加这个方法，支持指定视角
+    def get_observation_for_player(self, target_player_idx):
+        # 第一个永远是指定的 target_player
+        sorted_players = [self.players[target_player_idx]] + \
+                         [self.players[i] for i in range(self.num_players) if i != target_player_idx]
+
+        state = {
+            "factories": self.public_board.factories,
+            "center": self.public_board.center,
+            "me": sorted_players[0].to_dict(),
+            "opponents": [p.to_dict() for p in sorted_players[1:]]
+        }
+        return state
+
     def state_to_vector(self, state):
         # state 就是你刚才打印的那个大字典
         features = []
@@ -196,6 +258,143 @@ class AzulGame:
 
         # 最后转化成 NumPy 数组，这是转 PyTorch Tensor 的前置步
         return np.array(features, dtype=np.float32)
+
+    def get_refined_mask(self):
+        # 初始化全为 False 的 180 维布尔数组
+        mask = np.zeros(180, dtype=bool)
+        legal_moves = self.get_legal_moves()
+
+        for move in legal_moves:
+            if move in REVERSE_LOOKUP:
+                idx = REVERSE_LOOKUP[move]
+                mask[idx] = True
+        return mask
+
+    def clone(self):
+        return copy.deepcopy(self)
+
+    def analyze_moves(self):
+        legal_moves = self.get_legal_moves()
+        search_moves = self.get_search_moves_v2()
+        pair_to_targets = {}
+        for src, col, target in legal_moves:
+            key = (src, col)
+            if key not in pair_to_targets:
+                pair_to_targets[key] = []
+            pair_to_targets[key].append(target)
+
+        print("total legal moves:", len(legal_moves))
+        print("search moves:",len(search_moves))
+        # print("num (src,col) pairs:", len(pair_to_targets))
+
+        total_targets = 0
+        for key, targets in pair_to_targets.items():
+            total_targets += len(targets)
+        #     print(key, "->", targets)
+
+        # print("avg targets per (src,col):", total_targets / len(pair_to_targets))
+
+    def get_search_moves_v2(self, keep_top_r=2):
+        legal_moves = self.get_legal_moves()
+
+        groups = {}
+        for move in legal_moves:
+            src, col, target = move
+            key = (src, col)
+            groups.setdefault(key, []).append(move)
+
+        search_moves = []
+
+        for key, moves in groups.items():
+            scored = []
+            for move in moves:
+                score = self.quick_target_score(move)
+                scored.append((score, move))
+
+            scored.sort(key=lambda x: x[0], reverse=True)
+            selected = [move for score, move in scored[:keep_top_r]]
+            search_moves.extend(selected)
+
+        return search_moves
+
+    def quick_target_score(self, move):
+        src, col, target = move
+        num_tiles = self.count_tiles_taken(move)
+
+        # floor 单独处理
+        if target == 5:
+            return self.estimate_floor_value(move)
+
+        # 下面这些逻辑你按自己的 board 结构改
+        player = self.players[self.current_player_idx]  # 举例
+        line = player.pattern_lines[target]  # 举例
+
+        current_fill = len(line)  # 或你自己的写法
+        capacity = target + 1
+
+        # 这步放进去后，最多能塞多少
+        placed = min(num_tiles, capacity - current_fill)
+        overflow = max(0, num_tiles - (capacity - current_fill))
+
+        # 越接近补满越好，overflow 越多越差
+        fill_ratio = (current_fill + placed) / capacity
+
+        score = 0
+        score += 5 * fill_ratio
+        score += 3 * placed
+        score -= 4 * overflow
+
+        # 如果刚好补满，再额外奖励
+        if current_fill + placed == capacity:
+            score += 4
+
+        return score
+
+    def count_tiles_taken(self, move):
+        src, col, target = move
+
+        if src == "center":
+            tiles = self.public_board.center
+        else:
+            tiles = self.public_board.factories[src]
+
+        return tiles.count(col)
+
+    def estimate_floor_value(self, move):
+        num_tiles = self.count_tiles_taken(move)
+
+        if num_tiles <= 0:
+            return -999  # 理论上不该出现，防一手
+
+        penalty_table = [1, 3, 5, 7, 9, 12, 15]
+        if num_tiles >= 7:
+            floor_penalty = 15
+        else:
+            floor_penalty = penalty_table[num_tiles - 1]
+
+        deny_bonus = 2 * num_tiles
+
+        return deny_bonus - floor_penalty
+
+    @classmethod
+    def from_table_data(cls, table_data):
+        game = cls(num_players=1 + len(table_data.opponents), auto_init=False)
+        game.load_from_table_data(table_data)
+        return game
+
+    def load_from_table_data(self, table_data):
+        self.current_player_idx = 0
+        self.num_players = 1 + len(table_data.opponents)
+        # 这里先只重建基础对象壳子
+        self.public_board = PublicBoard(self.num_players)
+        self.players = [PlayerBoard(i) for i in range(self.num_players)]
+
+        self.public_board._load_factories(table_data.factories)
+        self.public_board._load_center(table_data.center)
+        self.players[0]._load_player(table_data.me)
+        for i in range(len(table_data.opponents)):
+            self.players[i+1]._load_player(table_data.opponents[i])
+
 
 
 class PublicBoard:
@@ -325,6 +524,26 @@ class PublicBoard:
             got_first = False  # 工厂里永远不会有先手牌
 
         return count, got_first
+
+    def _load_factories(self, factories):
+        for i in range(self.factory_count):
+            for j in range(4):
+                if factories[i][j].empty:
+                    self.factories[i][j] = EMPTY
+                else:
+                    self.factories[i][j] = factories[i][j].color
+
+    def _load_center(self, center):
+        self.center = []
+        for i in range(24):
+            if center[i].empty:
+                continue
+            else:
+                if center[i].color == 0:
+                    self.center.append(FIRST_PLAYER)
+                else:
+                    self.center.append(center[i].color)
+
 
 
 class PlayerBoard:
@@ -526,3 +745,60 @@ class PlayerBoard:
             "score": self.score,
         }
         return state
+
+    def player_board_bonus(self):
+        bonus = 0.0
+
+        # ===== pattern lines =====
+        for row in self.pattern_lines:
+            capacity = len(row)
+            filled = 0
+
+            for tile in row:
+                if tile != EMPTY:
+                    filled += 1
+
+            if capacity > 0:
+                ratio = filled / capacity
+                bonus += ratio
+
+            # 🔥 快完成奖励（很重要）
+            if filled == capacity - 1 and capacity > 1:
+                bonus += 0.8
+
+            # 🔥 已完成奖励（但还没结算到墙）
+            if filled == capacity:
+                bonus += 1.5
+
+        # ===== floor 惩罚 =====
+        floor_penalty = len(self.floor)
+
+        # 👉 Azul 实际是递增惩罚，这里简单模拟一下
+        # 比如：1,2,3,4,5 → 惩罚越来越重
+        bonus -= 0.5 * floor_penalty + 0.2 * (floor_penalty ** 2)
+
+        return bonus
+
+    def _load_player(self, player):
+        # score
+        self.score = player.score
+        # wall
+        for i in range(5):
+            for j in range(5):
+                if not player.coloredAreas[i][j].empty:
+                    self.wall[i][j] = True
+        # floor
+        for i in range(7):
+            if not player.loseAreas[i].empty:
+                self.floor.append(player.loseAreas[i].color)
+
+        # patten_line
+        for i in range(5):
+            for j in range(i+1):
+                if not player.manualAreas[i][j].empty:
+                    self.pattern_lines[i][j] = player.manualAreas[i][j].color
+
+
+if __name__ == "__main__":
+    game = AzulGame()
+    game.analyze_moves()
