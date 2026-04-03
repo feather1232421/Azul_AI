@@ -6,6 +6,7 @@ from search import AzulSearchAgent
 from config import *
 import time
 from explore_mtcs import MCTSAgent,AzulNet,MCTSAgentGreedy
+import torch
 
 
 def battle(agent_0, agent_1, games=50):
@@ -73,11 +74,18 @@ if __name__ == "__main__":
     #     top_k=5,
     #     verbose=False,
     # )
-    # model_1 = search_agent
+    # model_0 = search_agent
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
+    net = AzulNet(obs_dim=562, action_dim=180)
+    net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
+    net.to(device)
+    net.eval()
+    model_0 = MCTSAgent(n_simulations=200,my_player_idx=0,net=net,device=device)
     # model_1 = PPOAgent("azul_ppo_v10.zip")
-    net = AzulNet()
+    # net = AzulNet()
     # model_0 = MCTSAgent(n_simulations=200, net=net)
-    model_0 = MCTSAgentGreedy(n_simulations=200)
+    # model_0 = MCTSAgentGreedy(n_simulations=200)
     model_1 = GreedyAgent()
     battle(model_0, model_1, games=10)
 

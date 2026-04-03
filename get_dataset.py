@@ -1,13 +1,18 @@
 import pickle
+from tqdm import tqdm
+import torch
 from config import *
 from ai import GreedyAgent
 from search import AzulSearchAgent
 from environment import AzulEnv
 import numpy as np
 from scipy.special import softmax
+from logic import AzulGame
+from explore_mtcs import MCTSAgent, AzulNet
 
 
 def collect_regression_data(num_episodes=500, env=None, search_agent=None, temp=3.0):
+    greey_agent = GreedyAgent()
     dataset = []
     game = env.game
 
@@ -57,23 +62,86 @@ def collect_regression_data(num_episodes=500, env=None, search_agent=None, temp=
     return dataset
 
 
-if __name__ == "__main__":
-    env = AzulEnv()
-    greedy_agent = GreedyAgent()
-    search_agent = AzulSearchAgent(
-        evaluate_move_fn=greedy_agent.evaluate_move,
-        top_k=5,
-        verbose=False,
-    )
-    model = search_agent
+def collect_data(agent, games=100):
+    data = []
 
-    dataset = collect_regression_data(
-        num_episodes=600,
-        env=env,
-        search_agent=search_agent,
-    )
+    for game_idx in tqdm(range(games), desc="Collecting self-play data"):
+        game = AzulGame()
+        game.reset()
+        episode = []
+
+        while not game.is_game_over():
+            while not game.is_round_over():
+                curr_idx = game.current_player_idx
+                state = game.get_observation_for_player(curr_idx)
+                obs = game.state_to_vector_new(state)
+
+                move, pi = agent.decide(game)
+
+                episode.append((np.array(obs, copy=True), np.array(pi, copy=True), curr_idx))
+                game.play_turn(*move)
+
+            game._internal_scoring_flow()
+
+        if game.players[0].score > game.players[1].score:
+            winner = 0
+        elif game.players[1].score > game.players[0].score:
+            winner = 1
+        else:
+            winner = 2
+
+        for obs, pi, player_idx in episode:
+            if winner == 2:
+                z = 0.0
+            else:
+                z = 1.0 if player_idx == winner else -1.0
+            data.append((obs, pi, z))
+
+    return data
+
+
+def get_rank_based_z(rank, num_players):
+    if num_players <= 1:
+        return 0.0
+    return 1.0 - 2.0 * (rank - 1) / (num_players - 1)
+
+
+if __name__ == "__main__":
+    # env = AzulEnv()
+    # greedy_agent = GreedyAgent()
+    # search_agent = AzulSearchAgent(
+    #     evaluate_move_fn=greedy_agent.evaluate_move,
+    #     top_k=5,
+    #     verbose=False,
+    # )
+    # model = search_agent
+    #
+    # dataset = collect_regression_data(
+    #     num_episodes=600,
+    #     env=env,
+    #     search_agent=search_agent,
+    # )
+    # print("dataset size =", len(dataset))
+    # print("sample =", dataset[0])
+    #
+    # with open("search3_greedy_dataset.pkl", "wb") as f:
+    #     pickle.dump(dataset, f)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = AzulNet(obs_dim=562, action_dim=180)
+    net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
+    agent = MCTSAgent(n_simulations=200, my_player_idx=0, net=net, device=device, action_dim=180)
+    # greedy_agent = GreedyAgent()
+    # agent = AzulSearchAgent(
+    #     evaluate_move_fn=greedy_agent.evaluate_move,
+    #     top_k=5,
+    #     verbose=False,
+    # )
+
+    dataset = collect_data(agent, games=1)
+
     print("dataset size =", len(dataset))
     print("sample =", dataset[0])
 
-    with open("search3_greedy_dataset.pkl", "wb") as f:
+    with open("MCTS_nn_dataset_pi.pkl", "wb") as f:
         pickle.dump(dataset, f)

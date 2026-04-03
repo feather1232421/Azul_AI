@@ -46,9 +46,22 @@ color_map = [
 ]
 
 
+def color_to_onehot(color_id, num_colors=6):
+    """
+    color_id: 0=空, 1~5=颜色
+    输出: 长度6的one-hot向量
+    """
+    vec = [0] * num_colors
+    if 0 <= color_id < num_colors:
+        vec[color_id] = 1
+    return vec
+
+
 def color_to_column(row_idx, color):
     """
     已知行号和颜色，计算在墙面 5x5 矩阵里的列号
     公式：(color_id - 1 + row_idx) % 5
     """
     return (color - 1 + row_idx) % 5
+
+

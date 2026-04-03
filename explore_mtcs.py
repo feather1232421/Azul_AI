@@ -7,6 +7,9 @@ import torch
 import torch.nn as nn
 from logic import AzulGame
 import pickle
+from config import *
+import numpy as np
+from azul_net import AzulNet
 
 
 class MCTSNode:
@@ -24,10 +27,10 @@ class MCTSNode:
         self.visits = 0
         self.wins = 0.0
 
-    def ucb_score(self, C=1.4):
+    def ucb_score(self, C=0.5):
         if self.visits == 0:
             return float('inf')
-        q_value = self.wins / self.visits
+        q_value = self.wins / self.visits if self.visits > 0 else 0
         u_value = C * self.prior * math.sqrt(self.parent.visits) / (1 + self.visits)
         return q_value + u_value
 
@@ -37,69 +40,118 @@ class MCTSNode:
     def best_child(self, C=1.4):
         return max(self.children, key=lambda c: c.ucb_score(C))
 
-    def add_child(self, action):
-        # 先记录当前是谁在走
+    def add_child(self, action, prior):
+        # 记录当前是谁在走
         acting_player = self.game.current_player_idx
         new_game = copy.deepcopy(self.game)
         new_game.play_turn(*action)
-        child = MCTSNode(new_game, parent=self, action=action)
-        child.player_idx = acting_player  # 记录是谁走了这步
+        child = MCTSNode(new_game, parent=self, action=action, prior=prior)
+        child.player_idx = acting_player
         self.children.append(child)
         return child
 
 
 class MCTSAgent:
-    def __init__(self, n_simulations=200, my_player_idx=0, net=None):
+    def __init__(self, n_simulations=200, my_player_idx=0, net=None, device=None, action_dim=180):
         self.n_simulations = n_simulations
         self.my_player_idx = my_player_idx
+        self.device = device if device is not None else torch.device("cpu")
         self.net = net if net is not None else AzulNet()
+        self.net.to(self.device)
         self.net.eval()
+        self.action_dim = action_dim
 
-    def _get_obs_tensor(self, game):
+    def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
-        obs = game.state_to_vector(state)
-        return torch.FloatTensor(obs).unsqueeze(0)
+        obs = game.state_to_vector_new(state)
+        return torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-    def _evaluate(self, game):
-        obs = self._get_obs_tensor(game)
+    def _get_value_obs_tensor(self, game):
+        state = game.get_observation_for_player(self.my_player_idx)
+        obs = game.state_to_vector_new(state)
+        return torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+    def _evaluate_policy(self, game):
+        obs = self._get_policy_obs_tensor(game)
         with torch.no_grad():
-            policy_logits, value = self.net(obs)
-        return policy_logits.squeeze(0), value.item()
+            policy_logits, _ = self.net(obs)
+        return policy_logits.squeeze(0)
 
-    def decide(self, game):
+    def _evaluate_value(self, game):
+        obs = self._get_value_obs_tensor(game)
+        with torch.no_grad():
+            _, value_logit = self.net(obs)
+            value = value_logit
+            # print(f"当前value是{value}")
+            value = torch.tanh(value_logit)
+            # print(f"之后是{value}")
+
+        return value.item()
+
+    def decide(self, game, return_pi=True):
         self.my_player_idx = game.current_player_idx
         root = MCTSNode(copy.deepcopy(game))
 
         for _ in range(self.n_simulations):
             node = root
 
-            # Selection
+            # 1. Selection
             while node.is_fully_expanded() and node.children:
-                if node.game.current_player_idx == self.my_player_idx:
-                    node = node.best_child(C=1.4)
-                else:
-                    node = node.best_child(C=1.4)
+                node = node.best_child(C=1.4)
 
-            # Expansion
+            # 2. Expansion
             if node.untried_actions:
-                action = node.untried_actions.pop()
-                node = node.add_child(action)
+                policy_logits = self._evaluate_policy(node.game)
 
-            # NN估值替代rollout
-            _, value = self._evaluate(node.game)
+                legal_moves = node.untried_actions
+                logits = []
+                for move in legal_moves:
+                    idx = REVERSE_LOOKUP[move]
+                    logits.append(policy_logits[idx].item())
 
-            # Backpropagation
+                max_logit = max(logits)
+                exp_logits = [math.exp(l - max_logit) for l in logits]
+                sum_exp = sum(exp_logits) + 1e-8
+                priors = [e / sum_exp for e in exp_logits]
+
+                best_i = max(range(len(priors)), key=lambda i: priors[i])
+                action = legal_moves.pop(best_i)
+                prior = priors[best_i]
+
+                node = node.add_child(action, prior=prior)
+
+            # 3. Value evaluation
+            value = self._evaluate_value(node.game)
+
+            # 4. Backpropagation
             current = node
             while current is not None:
                 current.visits += 1
-                if current.player_idx == self.my_player_idx:
-                    current.wins += value
-                else:
-                    current.wins += (1.0 - value)
+                current.wins += value
                 current = current.parent
 
-        return max(root.children, key=lambda c: c.visits).action
+        if not root.children:
+            legal = game.get_legal_moves()
+            move = legal[0]
+            pi = np.zeros(self.action_dim, dtype=np.float32)
+            idx = REVERSE_LOOKUP[move]
+            pi[idx] = 1.0
+            return (move, pi) if return_pi else move
 
+        move = max(root.children, key=lambda c: c.visits).action
+        pi = self._build_pi_from_root(root)
+
+        return (move, pi) if return_pi else move
+
+    def _build_pi_from_root(self, root):
+        pi = np.zeros(self.action_dim, dtype=np.float32)
+        for child in root.children:
+            idx = REVERSE_LOOKUP[child.action]
+            pi[idx] = child.visits
+        s = pi.sum()
+        if s > 0:
+            pi /= s
+        return pi
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：
     # 1.
@@ -128,32 +180,27 @@ class MCTSAgent:
     # 循环...
 
 
-class AzulNet(nn.Module):
-    def __init__(self, obs_dim=142, action_dim=180):
-        super().__init__()
-        self.trunk = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-        )
-        self.value_head = nn.Sequential(
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.Sigmoid()
-        )
-        self.policy_head = nn.Sequential(
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, action_dim),
-        )
-
-    def forward(self, x):
-        trunk = self.trunk(x)
-        value = self.value_head(trunk)
-        policy = self.policy_head(trunk)
-        return policy, value
+# class AzulNet(nn.Module):
+#     def __init__(self, obs_dim=562, action_dim=180):
+#         super().__init__()
+#         self.trunk = nn.Sequential(
+#             nn.Linear(obs_dim, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 256),
+#             nn.ReLU(),
+#         )
+#         self.policy_head = nn.Linear(256, action_dim)
+#         self.value_head = nn.Sequential(
+#             nn.Linear(256, 64),
+#             nn.ReLU(),
+#             nn.Linear(64, 1)
+#         )
+#
+#     def forward(self, x):
+#         feat = self.trunk(x)
+#         policy_logits = self.policy_head(feat)
+#         value_logit = self.value_head(feat).squeeze(-1)
+#         return policy_logits, value_logit
 
 
 class MCTSAgentGreedy:
@@ -231,9 +278,9 @@ def collect_data(agent, games=100):
             while not game.public_board.is_empty():
                 curr_idx = game.current_player_idx
                 state = game.get_observation_for_player(curr_idx)
-                obs = game.state_to_vector(state)
+                obs = game.state_to_vector_new(state)
 
-                move = agent.decide(game)
+                move, _ = agent.decide(game)
                 episode_data.append((obs, curr_idx))
                 game.play_turn(*move)
 

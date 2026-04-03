@@ -10,14 +10,14 @@ beta = 0.1
 
 
 class AzulEnv(gym.Env):
-    def __init__(self, opponents=None):
+    def __init__(self, opponents=None, input_dim=562):
         super().__init__()
         # 动作空间：180个离散动作
         # 🌟 加上这一行，给计数器一个起点
         self.current_step = 0
         self.action_space = spaces.Discrete(180)
         # 观察空间：142个特征，范围根据你的向量实际情况定
-        self.observation_space = spaces.Box(low=-50, high=200, shape=(142,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-50, high=200, shape=(input_dim,), dtype=np.float32)
         self.game = AzulGame(num_players=2)
         # 建议：opponents 应该是模型对象的列表或字典
         self.opponents = opponents
@@ -139,7 +139,8 @@ class AzulEnv(gym.Env):
     def _get_obs(self):
         # 强制以 AI 的 ID 来生成观察值，不管现在轮到谁，也不管游戏是否结束
         state = self.game.get_observation_for_player(self.ai_player_id)
-        return self.game.state_to_vector(state)
+        # return self.game.state_to_vector(state)
+        return self.game.state_to_vector_new(state)
 
     def _potential(self, player):
         progress = 0.0

@@ -105,25 +105,26 @@ def train_old():
 
 
 def train_new():
-    ppo = PPOAgent("azul_ppo_v8")
+    # ppo = PPOAgent("azul_ppo_v8")
     opponents_pool = [GreedyAgent()]
+    # opponents_pool = [ppo]
     env = AzulEnv(opponents=opponents_pool)
 
     policy_kwargs = dict(
         # net_arch 定义了网络结构
         # pi: 策略网络（管动作），vf: 价值网络（管估分）
-        net_arch=dict(pi=[256, 256, 256], vf=[256, 256, 256])
+        net_arch=dict(pi=[512, 256], vf=[512, 256])
     )
 
     model = MaskablePPO.load(
-        "azul_ppo_v10.zip",
+        "Azul_new_vector_v1",
         env=env,
-        learning_rate=5e-5,
+        learning_rate=7e-5,
         n_steps=4096,
         n_epochs=10,
         batch_size=256,
         ent_coef=0.01,
-        gamma=0.99,
+        gamma=0.98,
         gae_lambda=0.97,
         clip_range=0.2,
         verbose=1,
@@ -131,22 +132,26 @@ def train_new():
     )
     # model = MaskablePPO(
     #     "MlpPolicy",
-    #     env = env,
+    #     env=env,
     #     policy_kwargs=policy_kwargs,
-    #     learning_rate=5e-5,
+    #     learning_rate=1e-4,
     #     n_steps=4096,
     #     batch_size=256,
     #     n_epochs=10,
-    #     gamma=0.995,
+    #     gamma=0.98,
     #     gae_lambda=0.97,
     #     ent_coef=0.01,
     #     clip_range=0.2,
     #     verbose=1,
     #     tensorboard_log="./azul_logs/",
     # )
-    model.learn(total_timesteps=100_000, progress_bar=True, callback=RewardDebugCallback(), reset_num_timesteps=False)
+    model.learn(total_timesteps=200_000,
+                progress_bar=True,
+                callback=RewardDebugCallback(),
+                reset_num_timesteps=False,
+                tb_log_name="PPO_new_vector")
     # 4. 保存成果
-    model.save("azul_ppo_v10")
+    model.save("Azul_new_vector_v1")
 
 
 if __name__ == "__main__":

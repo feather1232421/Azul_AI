@@ -210,6 +210,48 @@ class AzulGame:
         }
         return state
 
+    def state_to_vector_new(self, state):
+        features = []
+        # 1. 工厂：5个工厂 * 4个格子 * 6(one-hot) = 120个数字（原来是20个）
+        for factory in state['factories']:
+            for tile in factory:
+                features.extend(color_to_onehot(tile))  # 0=空也有自己的one-hot位
+        # 2. 中心：统计法，本来就对，不用改
+        center_counts = [0] * 6
+        for tile in state['center']:
+            center_counts[tile - 1] += 1
+        features.extend(center_counts)
+        # 3. "我"的状态
+        me = state['me']
+        # 墙面：已经是0/1，不用改
+        for row in me['wall']:
+            features.extend([1 if cell else 0 for cell in row])
+        # 待修行行：每格颜色需要one-hot
+        # 第i行最多i+1个格子，每格one-hot(6) -> 固定5行*5格*6 = 150个
+        for i, line in enumerate(me['pattern_lines']):
+            padded_line = line + [0] * (5 - len(line))  # 补0(空)到5格
+            for tile in padded_line:
+                features.extend(color_to_onehot(tile))
+        # 分数
+        features.append(me['score'])
+        # 地板：补齐7位，每格one-hot(6) -> 42个（原来是7个）
+        padded_floor = (me['floor'] + [0] * 7)[:7]
+        for tile in padded_floor:
+            features.extend(color_to_onehot(tile))
+        # 4. 对手（同样逻辑）
+        for opp in state['opponents']:
+            for row in opp['wall']:
+                features.extend([1 if cell else 0 for cell in row])
+            for i, line in enumerate(opp['pattern_lines']):
+                padded_line = line + [0] * (5 - len(line))
+                for tile in padded_line:
+                    features.extend(color_to_onehot(tile))
+            features.append(opp['score'])
+            padded_floor = (opp['floor'] + [0] * 7)[:7]
+            for tile in padded_floor:
+                features.extend(color_to_onehot(tile))
+        return np.array(features, dtype=np.float32)
+
     def state_to_vector(self, state):
         # state 就是你刚才打印的那个大字典
         features = []
