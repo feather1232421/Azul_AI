@@ -75,20 +75,21 @@ class AzulGame:
         return self.players[self.current_player_idx]
 
     def play_turn(self, source, color, target_row):
-        player = self.players[self.current_player_idx]
+        # player = self.players[self.current_player_idx]
 
-        # 1. 先问公共板：有货吗？
-        count, _ = self.public_board.preview_pick(source, color)
-        if count == 0:
-            return False
-        assert count != 0, "PublicBoard check failed"
-        # 2. 再问玩家：能放吗？
-        if not player.can_accept(color, target_row):
-            print("玩家表示：这砖我没法放这儿！")
-            return False
-        assert player.can_accept(color, target_row), "PlayerBoard check failed"
-
-        # 3. 检查都过了，正式开始“原子化”操作
+        # 已经实现get_legal_move , 如果行动不是legal_move中的则会直接挡下，AI则是只会输出legal_move， 故此段检测废弃
+        # # 1. 先问公共板：有货吗？
+        # count, _ = self.public_board.preview_pick(source, color)
+        # if count == 0:
+        #     return False
+        # assert count != 0, "PublicBoard check failed"
+        # # 2. 再问玩家：能放吗？
+        # if not player.can_accept(color, target_row):
+        #     print("玩家表示：这砖我没法放这儿！")
+        #     return False
+        # assert player.can_accept(color, target_row), "PlayerBoard check failed"
+        #
+        # # 3. 检查都过了，正式开始“原子化”操作
 
         # ... 执行真正的 pick 和 add ...
         self._apply_move(source, color, target_row)
@@ -437,6 +438,16 @@ class AzulGame:
         for i in range(len(table_data.opponents)):
             self.players[i+1]._load_player(table_data.opponents[i])
 
+    def clone_for_search(self):
+        new_game = AzulGame.__new__(AzulGame)
+        new_game.num_players = self.num_players
+        new_game.next_round_first_player = self.next_round_first_player
+        new_game.current_player_idx = self.current_player_idx
+        new_game.first_player = self.first_player
+        new_game.is_game_over = self.is_game_over
+        new_game.public_board = self.public_board.clone_for_search()
+        new_game.players = [p.clone_for_search() for p in self.players]
+        return new_game
 
 
 class PublicBoard:
@@ -586,6 +597,13 @@ class PublicBoard:
                 else:
                     self.center.append(center[i].color)
 
+    def clone_for_search(self):
+        new_publicboard = PublicBoard.__new__(PublicBoard)
+        new_publicboard.factories = [f[:] for f in self.factories]
+        new_publicboard.center = self.center[:]
+        new_publicboard.bag = self.bag[:]
+        new_publicboard.discard_pile = self.discard_pile[:]
+        return new_publicboard
 
 
 class PlayerBoard:
@@ -839,6 +857,15 @@ class PlayerBoard:
             for j in range(i+1):
                 if not player.manualAreas[i][j].empty:
                     self.pattern_lines[i][j] = player.manualAreas[i][j].color
+
+    def clone_for_search(self):
+        new_playerboard = PlayerBoard.__new__(PlayerBoard)
+        new_playerboard.player_id = self.player_id
+        new_playerboard.score = self.score
+        new_playerboard.wall = [row[:] for row in self.wall]
+        new_playerboard.floor = self.floor[:]
+        new_playerboard.pattern_lines = [line[:] for line in self.pattern_lines]
+        return new_playerboard
 
 
 if __name__ == "__main__":

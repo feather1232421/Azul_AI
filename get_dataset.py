@@ -3,8 +3,6 @@ from tqdm import tqdm
 import torch
 from config import *
 from ai import GreedyAgent
-from search import AzulSearchAgent
-from environment import AzulEnv
 import numpy as np
 from scipy.special import softmax
 from logic import AzulGame
@@ -12,7 +10,7 @@ from explore_mtcs import MCTSAgent, AzulNet
 
 
 def collect_regression_data(num_episodes=500, env=None, search_agent=None, temp=3.0):
-    greey_agent = GreedyAgent()
+    greedy_agent = GreedyAgent()
     dataset = []
     game = env.game
 

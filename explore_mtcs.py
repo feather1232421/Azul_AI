@@ -13,8 +13,8 @@ from azul_net import AzulNet
 
 
 class MCTSNode:
-    def __init__(self, game, parent=None, action=None, prior=0.0):
-        self.game = game  # deepcopy过来的AzulGame实例
+    def __init__(self, game=None, parent=None, action=None, prior=0.0):
+        self.game = game  # clone过来的AzulGame实例
         self.parent = parent
         self.action = action  # (从哪拿, 颜色, 放哪里)
         self.player_idx = game.current_player_idx  # add_child之前记录
@@ -43,12 +43,19 @@ class MCTSNode:
     def add_child(self, action, prior):
         # 记录当前是谁在走
         acting_player = self.game.current_player_idx
-        new_game = copy.deepcopy(self.game)
+        new_game = self.game.clone_for_search()
         new_game.play_turn(*action)
         child = MCTSNode(new_game, parent=self, action=action, prior=prior)
         child.player_idx = acting_player
         self.children.append(child)
         return child
+
+    # def add_child(self, action, prior):
+    #     acting_player = self.game.current_player_idx
+    #     child = MCTSNode(game, parent=self, action=action, prior=prior)
+    #     child.player_idx = acting_player
+    #     self.children.append(child)
+    #     return child
 
 
 class MCTSAgent:
@@ -60,6 +67,19 @@ class MCTSAgent:
         self.net.to(self.device)
         self.net.eval()
         self.action_dim = action_dim
+
+        # # 测速
+        # self.time_clone = 0.0
+        # self.time_play = 0.0
+        # self.time_legal = 0.0
+        # self.time_nn = 0.0
+        # self.time_select = 0.0
+        # self.time_expand = 0.0
+        # self.time_evaluate = 0.0
+        # self.time_backprop = 0.0
+        # self.time_encode = 0.0
+        # self.time_to_tensor = 0.0
+        # self.time_expand_child = 0.0
 
     def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
@@ -74,37 +94,49 @@ class MCTSAgent:
     def _evaluate_policy(self, game):
         obs = self._get_policy_obs_tensor(game)
         with torch.no_grad():
+            # t0 = time.perf_counter()
             policy_logits, _ = self.net(obs)
+            # self.time_nn += time.perf_counter() - t0
         return policy_logits.squeeze(0)
 
     def _evaluate_value(self, game):
         obs = self._get_value_obs_tensor(game)
         with torch.no_grad():
+            # t0 = time.perf_counter()
             _, value_logit = self.net(obs)
-            value = value_logit
-            # print(f"当前value是{value}")
+            # self.time_nn += time.perf_counter() - t0
+
             value = torch.tanh(value_logit)
-            # print(f"之后是{value}")
 
         return value.item()
 
     def decide(self, game, return_pi=True):
         self.my_player_idx = game.current_player_idx
-        root = MCTSNode(copy.deepcopy(game))
+        # root = MCTSNode(copy.deepcopy(game))
+        # t0 = time.perf_counter()
+        root = MCTSNode(game.clone_for_search())
+        # self.time_clone += time.perf_counter() - t0
 
         for _ in range(self.n_simulations):
             node = root
 
+            # t0 = time.perf_counter()
             # 1. Selection
             while node.is_fully_expanded() and node.children:
                 node = node.best_child(C=1.4)
+            # self.time_select += time.perf_counter() - t0
 
+            # t0 = time.perf_counter()
             # 2. Expansion
             if node.untried_actions:
                 policy_logits = self._evaluate_policy(node.game)
 
+                # t0 = time.perf_counter()
                 legal_moves = node.untried_actions
+                # self.time_legal += time.perf_counter() - t0
                 logits = []
+
+                t0 = time.perf_counter()
                 for move in legal_moves:
                     idx = REVERSE_LOOKUP[move]
                     logits.append(policy_logits[idx].item())
@@ -119,18 +151,25 @@ class MCTSAgent:
                 prior = priors[best_i]
 
                 node = node.add_child(action, prior=prior)
+            #     self.time_expand_child += time.perf_counter() - t0
+            # self.time_expand += time.perf_counter() - t0
 
+            # t0 = time.perf_counter()
             # 3. Value evaluation
             value = self._evaluate_value(node.game)
+            # self.time_evaluate += time.perf_counter() - t0
 
+            # t0 = time.perf_counter()
             # 4. Backpropagation
             current = node
             while current is not None:
                 current.visits += 1
                 current.wins += value
                 current = current.parent
+            # self.time_backprop += time.perf_counter() - t0
 
         if not root.children:
+            print("not root children")
             legal = game.get_legal_moves()
             move = legal[0]
             pi = np.zeros(self.action_dim, dtype=np.float32)
@@ -140,6 +179,17 @@ class MCTSAgent:
 
         move = max(root.children, key=lambda c: c.visits).action
         pi = self._build_pi_from_root(root)
+
+        # print("==== Time Breakdown ====")
+        # print(f"clone: {self.time_clone:.3f}s")
+        # print(f"play_turn: {self.time_play:.3f}s")
+        # print(f"nn: {self.time_nn:.3f}s")
+        # print(f"legal: {self.time_legal:.3f}s")
+        # print(f"time_evaluate: {self.time_evaluate:.3f}s")
+        # print(f"time_select: {self.time_select:.3f}s")
+        # print(f"time_expand: {self.time_expand:.3f}s")
+        # print(f"time_backprop: {self.time_backprop:.3f}s")
+        # print(f"time_expand_child: {self.time_expand_child:.3f}s")
 
         return (move, pi) if return_pi else move
 

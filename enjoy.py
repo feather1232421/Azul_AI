@@ -3,6 +3,7 @@ import os
 from sb3_contrib import MaskablePPO
 from environment import AzulEnv
 from config import ACTION_LOOKUP
+from explore_mtcs import MCTSAgent
 
 
 def enjoy():
