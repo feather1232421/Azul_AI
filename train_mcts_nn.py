@@ -74,16 +74,23 @@ def evaluate(model, loader, device):
     total_top1_match = 0
     total_samples = 0
 
-    for obs, pi, z in loader:
+    for obs, pi, z, mask in loader:
         obs = obs.to(device)   # [B, 562]
         pi = pi.to(device)     # [B, 180]
         z = z.to(device)       # [B]
+        mask = mask.to(device)
 
         policy_logits, value_logit = model(obs)   # [B,180], [B]
         value_pred = torch.tanh(value_logit)      # [B]
 
+        # 1. 把非法动作位置变成极小值
+        masked_logits = policy_logits.masked_fill(mask == 0, -1e9)
+
+        # policy loss: target distribution
+        # 2. 再做 softmax
+        log_probs = torch.log_softmax(masked_logits, dim=-1)
+        # 3. 正常算 CE
         # policy loss: target is a distribution
-        log_probs = torch.log_softmax(policy_logits, dim=-1)
         policy_loss = -(pi * log_probs).sum(dim=-1).mean()
 
         # value loss: z in {-1,0,1}
@@ -173,11 +180,20 @@ def train(
     # 加载权重（如有）
     if resume_path is not None:
         ckpt = torch.load(resume_path, map_location=device)
-        model.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        start_epoch = ckpt["epoch"] + 1
-        best_val_loss = ckpt["best_val_loss"]
-        print(f"Resume from epoch {start_epoch}")
+
+        if isinstance(ckpt, dict) and "model" in ckpt:
+            model.load_state_dict(ckpt["model"])
+            if "optimizer" in ckpt:
+                optimizer.load_state_dict(ckpt["optimizer"])
+            start_epoch = ckpt.get("epoch", 0) + 1
+            best_val_loss = ckpt.get("best_val_loss", float("inf"))
+            print(f"Resume from epoch {start_epoch}")
+        else:
+            # 兼容旧版：直接就是 state_dict
+            model.load_state_dict(ckpt)
+            start_epoch = 1
+            best_val_loss = float("inf")
+            print("Loaded model weights only (no optimizer/epoch info).")
     else:
         start_epoch = 1
         best_val_loss = float("inf")
@@ -192,17 +208,22 @@ def train(
         total_samples = 0
 
         # for obs, pi, z in train_loader:
-        for obs, pi, z in tqdm(train_loader, desc=f"Epoch {epoch}"):
+        for obs, pi, z, mask in tqdm(train_loader, desc=f"Epoch {epoch}"):
 
             obs = obs.to(device)   # [B, 562]
             pi = pi.to(device)     # [B, 180]
             z = z.to(device)       # [B]
+            mask = mask.to(device) # [B, 180]
 
             policy_logits, value_logit = model(obs)   # [B,180], [B]
+            # 1. 把非法动作位置变成极小值
+            masked_logits = policy_logits.masked_fill(mask == 0, -1e9)
             value_pred = torch.tanh(value_logit)      # [B]
 
             # policy loss: target distribution
-            log_probs = torch.log_softmax(policy_logits, dim=-1)
+            # 2. 再做 softmax
+            log_probs = torch.log_softmax(masked_logits, dim=-1)
+            # 3. 正常算 CE
             policy_loss = -(pi * log_probs).sum(dim=-1).mean()
 
             # value loss: z in {-1,0,1}
@@ -259,8 +280,9 @@ def train(
 
 if __name__ == "__main__":
     train(
-        data_path="MCTS_nn_dataset.pkl",   # 改成你的数据文件名
-        save_path="azul_net_best.pt",
+        data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
+        save_path="azul_net_v1.pt",
+        resume_path=None,
         batch_size=256,
         lr=1e-3,
         weight_decay=1e-4,

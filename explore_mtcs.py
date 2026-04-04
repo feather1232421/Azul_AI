@@ -27,7 +27,7 @@ class MCTSNode:
         self.visits = 0
         self.wins = 0.0
 
-    def ucb_score(self, C=0.5):
+    def ucb_score(self, C=1.4):
         if self.visits == 0:
             return float('inf')
         q_value = self.wins / self.visits if self.visits > 0 else 0
@@ -111,6 +111,12 @@ class MCTSAgent:
         return value.item()
 
     def decide(self, game, return_pi=True):
+        legal = game.get_legal_moves()
+        mask = np.zeros(180, dtype=np.float32)
+        for move in legal:
+            idx = REVERSE_LOOKUP[move]
+            mask[idx] = 1.0
+
         self.my_player_idx = game.current_player_idx
         # root = MCTSNode(copy.deepcopy(game))
         # t0 = time.perf_counter()
@@ -191,7 +197,7 @@ class MCTSAgent:
         # print(f"time_backprop: {self.time_backprop:.3f}s")
         # print(f"time_expand_child: {self.time_expand_child:.3f}s")
 
-        return (move, pi) if return_pi else move
+        return (move, pi, mask) if return_pi else move
 
     def _build_pi_from_root(self, root):
         pi = np.zeros(self.action_dim, dtype=np.float32)
@@ -202,6 +208,18 @@ class MCTSAgent:
         if s > 0:
             pi /= s
         return pi
+
+    # TODO: 把这些接上
+    # def decide(self, game):
+    #     move, _, _ = self._search(game)
+    #     return move
+    #
+    # def decide_with_info(self, game):
+    #     return self._search(game)
+    #
+    # def _search(self, game):
+    #     ...
+    #     return move, pi, mask
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：
     # 1.

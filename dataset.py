@@ -11,10 +11,11 @@ class AzulMCTSDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        obs, pi, z = self.samples[idx]
+        obs, pi, z, mask = self.samples[idx]
 
         obs = torch.tensor(obs, dtype=torch.float32)
         pi = torch.tensor(pi, dtype=torch.float32)
         z = torch.tensor(z, dtype=torch.float32)
+        mask = torch.tensor(mask, dtype=torch.float32)
 
-        return obs, pi, z
+        return obs, pi, z, mask
