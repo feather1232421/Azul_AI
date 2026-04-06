@@ -198,7 +198,7 @@ def train(
         start_epoch = 1
         best_val_loss = float("inf")
 
-    for epoch in range(start_epoch, epochs + 1):
+    for epoch in range(start_epoch, epochs + start_epoch):
         model.train()
 
         total_loss = 0.0
@@ -281,12 +281,12 @@ def train(
 if __name__ == "__main__":
     train(
         data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
-        save_path="azul_net_v1.pt",
-        resume_path=None,
+        save_path="azul_net_v2.pt",
+        resume_path="azul_net_best.pt",
         batch_size=256,
-        lr=1e-3,
+        lr=5e-4,
         weight_decay=1e-4,
-        epochs=15,
+        epochs=10,
         train_ratio=0.9,
         seed=42,
     )

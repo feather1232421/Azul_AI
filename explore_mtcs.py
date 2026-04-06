@@ -27,11 +27,20 @@ class MCTSNode:
         self.visits = 0
         self.wins = 0.0
 
+    # def ucb_score(self, C=1.4):
+    #     if self.visits == 0:
+    #         return float('inf')
+    #     q_value = self.wins / self.visits if self.visits > 0 else 0
+    #     u_value = C * self.prior * math.sqrt(self.parent.visits) / (1 + self.visits)
+    #     return q_value + u_value
+
+    # new
     def ucb_score(self, C=1.4):
-        if self.visits == 0:
-            return float('inf')
-        q_value = self.wins / self.visits if self.visits > 0 else 0
-        u_value = C * self.prior * math.sqrt(self.parent.visits) / (1 + self.visits)
+        q_value = 0.0 if self.visits == 0 else self.wins / self.visits
+        if self.parent is None:
+            u_value = 0.0
+        else:
+            u_value = C * self.prior * math.sqrt(self.parent.visits + 1e-8) / (1 + self.visits)
         return q_value + u_value
 
     def is_fully_expanded(self):
@@ -39,6 +48,13 @@ class MCTSNode:
 
     def best_child(self, C=1.4):
         return max(self.children, key=lambda c: c.ucb_score(C))
+
+    # # new
+    # def best_child(self, root_player_idx, C=1.4):
+    #     if self.game.current_player_idx == root_player_idx:
+    #         return max(self.children, key=lambda c: c.ucb_score(C))
+    #     else:
+    #         return min(self.children, key=lambda c: c.ucb_score(C))
 
     def add_child(self, action, prior):
         # 记录当前是谁在走
@@ -67,19 +83,6 @@ class MCTSAgent:
         self.net.to(self.device)
         self.net.eval()
         self.action_dim = action_dim
-
-        # # 测速
-        # self.time_clone = 0.0
-        # self.time_play = 0.0
-        # self.time_legal = 0.0
-        # self.time_nn = 0.0
-        # self.time_select = 0.0
-        # self.time_expand = 0.0
-        # self.time_evaluate = 0.0
-        # self.time_backprop = 0.0
-        # self.time_encode = 0.0
-        # self.time_to_tensor = 0.0
-        # self.time_expand_child = 0.0
 
     def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
@@ -110,7 +113,7 @@ class MCTSAgent:
 
         return value.item()
 
-    def decide(self, game, return_pi=True):
+    def _search(self, game):
         legal = game.get_legal_moves()
         mask = np.zeros(180, dtype=np.float32)
         for move in legal:
@@ -126,53 +129,50 @@ class MCTSAgent:
         for _ in range(self.n_simulations):
             node = root
 
-            # t0 = time.perf_counter()
             # 1. Selection
             while node.is_fully_expanded() and node.children:
                 node = node.best_child(C=1.4)
-            # self.time_select += time.perf_counter() - t0
 
-            # t0 = time.perf_counter()
+            # while node.is_fully_expanded() and node.children:
+            #     node = node.best_child(self.my_player_idx, C=1.4)
+
             # 2. Expansion
             if node.untried_actions:
                 policy_logits = self._evaluate_policy(node.game)
-
-                # t0 = time.perf_counter()
                 legal_moves = node.untried_actions
-                # self.time_legal += time.perf_counter() - t0
-                logits = []
 
-                t0 = time.perf_counter()
-                for move in legal_moves:
-                    idx = REVERSE_LOOKUP[move]
-                    logits.append(policy_logits[idx].item())
-
+                # 算所有动作的prior
+                logits = [policy_logits[REVERSE_LOOKUP[m]].item() for m in legal_moves]
                 max_logit = max(logits)
                 exp_logits = [math.exp(l - max_logit) for l in logits]
                 sum_exp = sum(exp_logits) + 1e-8
                 priors = [e / sum_exp for e in exp_logits]
 
-                best_i = max(range(len(priors)), key=lambda i: priors[i])
-                action = legal_moves.pop(best_i)
-                prior = priors[best_i]
+                # 直接pop最后一个（已shuffle，随机的）
+                action = legal_moves.pop()
+                prior = priors.pop()  # 对应同一个位置
 
                 node = node.add_child(action, prior=prior)
-            #     self.time_expand_child += time.perf_counter() - t0
-            # self.time_expand += time.perf_counter() - t0
 
-            # t0 = time.perf_counter()
             # 3. Value evaluation
             value = self._evaluate_value(node.game)
             # self.time_evaluate += time.perf_counter() - t0
 
-            # t0 = time.perf_counter()
             # 4. Backpropagation
+            # current = node
+            # while current is not None:
+            #     current.visits += 1
+            #     current.wins += value
+            #     current = current.parent
+
             current = node
             while current is not None:
                 current.visits += 1
-                current.wins += value
+                if current.player_idx == self.my_player_idx:
+                    current.wins += value
+                else:
+                    current.wins -= value
                 current = current.parent
-            # self.time_backprop += time.perf_counter() - t0
 
         if not root.children:
             print("not root children")
@@ -181,23 +181,12 @@ class MCTSAgent:
             pi = np.zeros(self.action_dim, dtype=np.float32)
             idx = REVERSE_LOOKUP[move]
             pi[idx] = 1.0
-            return (move, pi) if return_pi else move
+            return move, pi, mask
 
         move = max(root.children, key=lambda c: c.visits).action
         pi = self._build_pi_from_root(root)
 
-        # print("==== Time Breakdown ====")
-        # print(f"clone: {self.time_clone:.3f}s")
-        # print(f"play_turn: {self.time_play:.3f}s")
-        # print(f"nn: {self.time_nn:.3f}s")
-        # print(f"legal: {self.time_legal:.3f}s")
-        # print(f"time_evaluate: {self.time_evaluate:.3f}s")
-        # print(f"time_select: {self.time_select:.3f}s")
-        # print(f"time_expand: {self.time_expand:.3f}s")
-        # print(f"time_backprop: {self.time_backprop:.3f}s")
-        # print(f"time_expand_child: {self.time_expand_child:.3f}s")
-
-        return (move, pi, mask) if return_pi else move
+        return move, pi, mask
 
     def _build_pi_from_root(self, root):
         pi = np.zeros(self.action_dim, dtype=np.float32)
@@ -209,17 +198,23 @@ class MCTSAgent:
             pi /= s
         return pi
 
-    # TODO: 把这些接上
-    # def decide(self, game):
-    #     move, _, _ = self._search(game)
-    #     return move
-    #
-    # def decide_with_info(self, game):
-    #     return self._search(game)
-    #
-    # def _search(self, game):
-    #     ...
-    #     return move, pi, mask
+    def decide(self, game):
+        move, _, _ = self._search(game)
+        return move
+
+    def decide_with_info(self, game):
+        return self._search(game)
+
+    # 未来使用
+    # def _backprop(self, node, value, n_players):
+    #     current = node
+    #     while current is not None:
+    #         current.visits += 1
+    #         if current.player_idx == self.my_player_idx:
+    #             current.wins += value
+    #         else:
+    #             current.wins -= value / (n_players - 1)
+    #         current = current.parent
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：
     # 1.
@@ -316,6 +311,7 @@ class MCTSAgentGreedy:
             if node.untried_actions:
                 action = node.untried_actions.pop()
                 node = node.add_child(action)
+
 
             # Simulation
             result = self._rollout(node.game)

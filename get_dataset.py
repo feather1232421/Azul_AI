@@ -74,7 +74,7 @@ def collect_data(agent, games=100):
                 state = game.get_observation_for_player(curr_idx)
                 obs = game.state_to_vector_new(state)
 
-                move, pi, mask = agent.decide(game)
+                move, pi, mask = agent.decide_with_info(game)
 
                 episode.append((np.array(obs, copy=True), np.array(pi, copy=True), curr_idx, np.array(mask, copy=True)))
                 game.play_turn(*move)
@@ -105,36 +105,10 @@ def get_rank_based_z(rank, num_players):
 
 
 if __name__ == "__main__":
-    # env = AzulEnv()
-    # greedy_agent = GreedyAgent()
-    # search_agent = AzulSearchAgent(
-    #     evaluate_move_fn=greedy_agent.evaluate_move,
-    #     top_k=5,
-    #     verbose=False,
-    # )
-    # model = search_agent
-    #
-    # dataset = collect_regression_data(
-    #     num_episodes=600,
-    #     env=env,
-    #     search_agent=search_agent,
-    # )
-    # print("dataset size =", len(dataset))
-    # print("sample =", dataset[0])
-    #
-    # with open("search3_greedy_dataset.pkl", "wb") as f:
-    #     pickle.dump(dataset, f)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net = AzulNet(obs_dim=562, action_dim=180)
     net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
-    agent = MCTSAgent(n_simulations=500, my_player_idx=0, net=net, device=device, action_dim=180)
-    # greedy_agent = GreedyAgent()
-    # agent = AzulSearchAgent(
-    #     evaluate_move_fn=greedy_agent.evaluate_move,
-    #     top_k=5,
-    #     verbose=False,
-    # )
+    agent = MCTSAgent(n_simulations=200, my_player_idx=0, net=net, device=device, action_dim=180)
 
     dataset = collect_data(agent, games=100)
 
