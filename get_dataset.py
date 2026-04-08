@@ -21,7 +21,7 @@ def collect_data(agent, games=100):
             while not game.is_round_over():
                 curr_idx = game.current_player_idx
                 state = game.get_observation_for_player(curr_idx)
-                obs = game.state_to_vector_new(state)
+                obs = game.state_to_vector_np(state)
 
                 # 这里的 move, pi, mask 是搜索出来的
                 _, pi, mask = agent.decide_with_info(game)

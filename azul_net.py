@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class AzulNet(nn.Module):
-    def __init__(self, obs_dim=562, action_dim=180):
+    def __init__(self, obs_dim=567, action_dim=180):
         super().__init__()
         self.trunk = nn.Sequential(
             nn.Linear(obs_dim, 512),

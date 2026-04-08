@@ -210,7 +210,7 @@ def train(
         # for obs, pi, z in train_loader:
         for obs, pi, z, mask in tqdm(train_loader, desc=f"Epoch {epoch}"):
 
-            obs = obs.to(device)   # [B, 562]
+            obs = obs.to(device)   # [B, 562] new 567
             pi = pi.to(device)     # [B, 180]
             z = z.to(device)       # [B]
             mask = mask.to(device) # [B, 180]
@@ -229,7 +229,7 @@ def train(
             # value loss: z in {-1,0,1}
             value_loss = F.mse_loss(value_pred, z)
 
-            loss = policy_loss + 0.5 * value_loss
+            loss = policy_loss +  value_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -282,7 +282,8 @@ if __name__ == "__main__":
     train(
         data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
         save_path="azul_net_v3.pt",
-        resume_path="azul_net_best.pt",
+        # resume_path="azul_net_best.pt",
+        resume_path=None,
         batch_size=256,
         lr=5e-4,
         weight_decay=1e-4,
