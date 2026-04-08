@@ -66,8 +66,8 @@ def get_rank_based_z(rank, num_players):
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = AzulNet(obs_dim=562, action_dim=180)
-    net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
+    net = AzulNet(obs_dim=567, action_dim=180)
+    # net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
     agent = MCTSAgent(n_simulations=200, my_player_idx=0, net=net, device=device, action_dim=180)
 
     dataset = collect_data(agent, games=100)
