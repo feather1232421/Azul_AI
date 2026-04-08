@@ -9,57 +9,6 @@ from logic import AzulGame
 from explore_mtcs import MCTSAgent, AzulNet
 
 
-# def collect_regression_data(num_episodes=500, env=None, search_agent=None, temp=3.0):
-#     greedy_agent = GreedyAgent()
-#     dataset = []
-#     game = env.game
-#
-#     for ep in range(num_episodes):
-#         game.reset()
-#         while not game.is_game_over():
-#             # 轮次结算逻辑
-#             if game.is_round_over():
-#                 game._internal_scoring_flow()
-#                 if game.is_game_over(): break
-#
-#             if game.current_player_idx == 0:
-#                 # A. 提取特征
-#                 obs = game.state_to_vector(game.get_observation_for_player(0))
-#
-#                 # B. 获取所有动作的深度搜索评分
-#                 # 这一步是 0.3 秒一局的关键：我们只在玩家 0 决策时搜索
-#                 move_scores_dict = search_agent.evaluate_all_moves(game)
-#
-#                 if not move_scores_dict:
-#                     break
-#
-#                 # C. 转化为概率分布 (回归目标)
-#                 # 只有被搜过的动作有分，没被搜过的(太烂的)默认给一个很低的分
-#                 full_scores = np.full(180, -999.0, dtype=np.float32)
-#                 for idx, val in move_scores_dict.items():
-#                     full_scores[idx] = val
-#
-#                 # Softmax 归一化 (Softmax 会自动忽略 -999 那些极小值)
-#                 target_pi = softmax(full_scores / temp)
-#
-#                 # D. 存储样本
-#                 dataset.append((obs.copy(), target_pi))
-#
-#                 # E. 实际走棋：选搜出来的分数最高的那个
-#                 best_action_idx = max(move_scores_dict, key=move_scores_dict.get)
-#                 best_move = ACTION_LOOKUP[best_action_idx]  # 假设你有反查表
-#                 game.play_turn(*best_move)
-#             else:
-#                 # 对手玩家 1：直接用最快的 Greedy，不搜索
-#                 move = greedy_agent.decide(game)
-#                 game.play_turn(*move)
-#
-#             if game.is_round_over():
-#                 game._internal_scoring_flow()
-#
-#     return dataset
-
-
 def collect_data(agent, games=100):
     data = []
 
@@ -74,12 +23,23 @@ def collect_data(agent, games=100):
                 state = game.get_observation_for_player(curr_idx)
                 obs = game.state_to_vector_new(state)
 
-                move, pi, mask = agent.decide_with_info(game)
+                # 这里的 move, pi, mask 是搜索出来的
+                _, pi, mask = agent.decide_with_info(game)
+
+                # --- 核心修改：在这里进行采样 ---
+                # 1. 产生动作索引 (0-179)
+                # 注意：pi 已经归一化过了，直接用做概率
+                move_idx = np.random.choice(len(pi), p=pi)
+
+                # 2. 从索引转回真正的动作元组
+                # 假设你有一个 ACTION_LOOKUP 列表存放了所有 180 个动作
+                move = ACTION_LOOKUP[move_idx]
+                # -----------------------------
 
                 episode.append((np.array(obs, copy=True), np.array(pi, copy=True), curr_idx, np.array(mask, copy=True)))
                 game.play_turn(*move)
 
-            game._internal_scoring_flow()
+            # game._internal_scoring_flow()
 
         if game.players[0].score > game.players[1].score:
             winner = 0

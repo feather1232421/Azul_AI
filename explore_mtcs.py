@@ -12,20 +12,44 @@ import numpy as np
 from azul_net import AzulNet
 
 
+def compute_softmax_over_legal(policy_logits, legal_moves):
+    priors = {}
+
+    # 1. 取出合法动作对应的 logits
+    logits = []
+    for m in legal_moves:
+        idx = REVERSE_LOOKUP[m]
+        logits.append(policy_logits[idx].item())
+
+    # 2. 数值稳定的 softmax（减 max）
+    max_logit = max(logits)
+    exp_logits = [math.exp(l - max_logit) for l in logits]
+    sum_exp = sum(exp_logits) + 1e-8
+
+    # 3. 归一化，并映射回 move
+    for m, e in zip(legal_moves, exp_logits):
+        priors[m] = e / sum_exp
+
+    return priors
+
+
 class MCTSNode:
     def __init__(self, game=None, parent=None, action=None, prior=0.0):
+        self.children = []  # 存储子节点对象
+        self.children_actions = {}  # 新增：用字典快速检索 {action: child_node}
+
+        self.visits = 0
+        self.wins = 0.0
         self.game = game  # clone过来的AzulGame实例
         self.parent = parent
         self.action = action  # (从哪拿, 颜色, 放哪里)
         self.player_idx = game.current_player_idx  # add_child之前记录
         self.prior = prior  # 网络给这个动作的先验概率
 
-        self.children = []
         self.untried_actions = self.game.get_legal_moves()  # 你现有的合法动作列表
         random.shuffle(self.untried_actions)  # 打乱顺序，避免偏差
 
-        self.visits = 0
-        self.wins = 0.0
+        self.priors = None  # 存整张分布
 
     # def ucb_score(self, C=1.4):
     #     if self.visits == 0:
@@ -43,8 +67,8 @@ class MCTSNode:
             u_value = C * self.prior * math.sqrt(self.parent.visits + 1e-8) / (1 + self.visits)
         return q_value + u_value
 
-    def is_fully_expanded(self):
-        return len(self.untried_actions) == 0
+    def is_expanded(self):
+        return len(self.children) > 0
 
     def best_child(self, C=1.4):
         return max(self.children, key=lambda c: c.ucb_score(C))
@@ -57,26 +81,20 @@ class MCTSNode:
     #         return min(self.children, key=lambda c: c.ucb_score(C))
 
     def add_child(self, action, prior):
-        # 记录当前是谁在走
-        acting_player = self.game.current_player_idx
+        # 这里的 clone 只有在真正需要新节点时才做
         new_game = self.game.clone_for_search()
         new_game.play_turn(*action)
-        child = MCTSNode(new_game, parent=self, action=action, prior=prior)
-        child.player_idx = acting_player
-        self.children.append(child)
-        return child
 
-    # def add_child(self, action, prior):
-    #     acting_player = self.game.current_player_idx
-    #     child = MCTSNode(game, parent=self, action=action, prior=prior)
-    #     child.player_idx = acting_player
-    #     self.children.append(child)
-    #     return child
+        child = MCTSNode(new_game, parent=self, action=action, prior=prior)
+        self.children.append(child)
+        self.children_actions[action] = child  # 记录动作
+        return child
 
 
 class MCTSAgent:
     def __init__(self, n_simulations=200, my_player_idx=0, net=None, device=None, action_dim=180):
         self.n_simulations = n_simulations
+        # 当前二人零和版本中，my_player_idx 不再参与 value 语义
         self.my_player_idx = my_player_idx
         self.device = device if device is not None else torch.device("cpu")
         self.net = net if net is not None else AzulNet()
@@ -86,32 +104,40 @@ class MCTSAgent:
 
     def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
-        obs = game.state_to_vector_new(state)
+        obs = game.state_to_vector_np(state)
         return torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
+    # 二人零和，先这样
     def _get_value_obs_tensor(self, game):
-        state = game.get_observation_for_player(self.my_player_idx)
-        obs = game.state_to_vector_new(state)
+        state = game.get_observation_current()
+        obs = game.state_to_vector_np(state)
         return torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
 
     def _evaluate_policy(self, game):
         obs = self._get_policy_obs_tensor(game)
         with torch.no_grad():
-            # t0 = time.perf_counter()
             policy_logits, _ = self.net(obs)
-            # self.time_nn += time.perf_counter() - t0
         return policy_logits.squeeze(0)
 
     def _evaluate_value(self, game):
         obs = self._get_value_obs_tensor(game)
         with torch.no_grad():
-            # t0 = time.perf_counter()
             _, value_logit = self.net(obs)
-            # self.time_nn += time.perf_counter() - t0
-
             value = torch.tanh(value_logit)
-
         return value.item()
+
+    def _evaluate(self, game):
+        obs = self._get_value_obs_tensor(game)
+        with torch.no_grad():
+            policy_logits, value_logit = self.net(obs)
+            # value_logit 是一个标量，可以用 item()
+            value = torch.tanh(value_logit).item()
+
+            # policy_logits 需要去掉 batch 维度，转回 CPU 上的 numpy 或 list
+            # 这样你在 compute_softmax_over_legal 里访问比较快
+            policy_vector = policy_logits.squeeze(0).cpu().numpy()
+
+        return policy_vector, value
 
     def _search(self, game):
         legal = game.get_legal_moves()
@@ -121,58 +147,30 @@ class MCTSAgent:
             mask[idx] = 1.0
 
         self.my_player_idx = game.current_player_idx
-        # root = MCTSNode(copy.deepcopy(game))
-        # t0 = time.perf_counter()
         root = MCTSNode(game.clone_for_search())
-        # self.time_clone += time.perf_counter() - t0
 
         for _ in range(self.n_simulations):
             node = root
-
             # 1. Selection
-            while node.is_fully_expanded() and node.children:
+            while node.is_expanded() and not node.game.is_game_over():
                 node = node.best_child(C=1.4)
 
-            # while node.is_fully_expanded() and node.children:
-            #     node = node.best_child(self.my_player_idx, C=1.4)
+            # 2. Expansion & Evaluation
+            if node.game.is_game_over():
+                value = self._terminal_value(node)
+            else:
+                # 核心：一次推理，拿回两个结果
+                policy_logits, value = self._evaluate(node.game)
 
-            # 2. Expansion
-            if node.untried_actions:
-                policy_logits = self._evaluate_policy(node.game)
-                legal_moves = node.untried_actions
+                legal_moves = node.game.get_legal_moves()
+                priors = compute_softmax_over_legal(policy_logits, legal_moves)
 
-                # 算所有动作的prior
-                logits = [policy_logits[REVERSE_LOOKUP[m]].item() for m in legal_moves]
-                max_logit = max(logits)
-                exp_logits = [math.exp(l - max_logit) for l in logits]
-                sum_exp = sum(exp_logits) + 1e-8
-                priors = [e / sum_exp for e in exp_logits]
+                # 建立子节点
+                for action, p in priors.items():
+                    node.add_child(action, prior=p)
 
-                # 直接pop最后一个（已shuffle，随机的）
-                action = legal_moves.pop()
-                prior = priors.pop()  # 对应同一个位置
-
-                node = node.add_child(action, prior=prior)
-
-            # 3. Value evaluation
-            value = self._evaluate_value(node.game)
-            # self.time_evaluate += time.perf_counter() - t0
-
-            # 4. Backpropagation
-            # current = node
-            # while current is not None:
-            #     current.visits += 1
-            #     current.wins += value
-            #     current = current.parent
-
-            current = node
-            while current is not None:
-                current.visits += 1
-                if current.player_idx == self.my_player_idx:
-                    current.wins += value
-                else:
-                    current.wins -= value
-                current = current.parent
+            # 3. Backprop
+            self._backprop(node, value)
 
         if not root.children:
             print("not root children")
@@ -182,9 +180,15 @@ class MCTSAgent:
             idx = REVERSE_LOOKUP[move]
             pi[idx] = 1.0
             return move, pi, mask
-
+        
         move = max(root.children, key=lambda c: c.visits).action
         pi = self._build_pi_from_root(root)
+
+        # 搜索结束后，打印 root 的子节点统计
+        for child in sorted(root.children, key=lambda c: -c.visits)[:5]:
+            q = child.wins / child.visits if child.visits > 0 else 0
+            print(
+                f"action={child.action} visits={child.visits} wins={child.wins:.2f} Q={q:.3f} prior={child.prior:.3f}")
 
         return move, pi, mask
 
@@ -205,16 +209,26 @@ class MCTSAgent:
     def decide_with_info(self, game):
         return self._search(game)
 
-    # 未来使用
-    # def _backprop(self, node, value, n_players):
-    #     current = node
-    #     while current is not None:
-    #         current.visits += 1
-    #         if current.player_idx == self.my_player_idx:
-    #             current.wins += value
-    #         else:
-    #             current.wins -= value / (n_players - 1)
-    #         current = current.parent
+    def _terminal_value(self, node):
+        winner = node.game.get_game_result()
+        if winner == -1:
+            return 0.0  # 平局
+        # 关键：node.game.current_player_idx 是当前“轮到”谁走
+        # 如果赢家是这个人，返回 1.0；如果是对手，返回 -1.0
+        return 1.0 if winner == node.game.current_player_idx else -1.0
+
+    def _backprop(self, node, value):
+        # value: 神经网络或终局算出的值 (针对 node.game 的当前玩家)
+        current = node
+        v = value
+        while current is not None:
+            current.visits += 1
+            # current.wins 记录的是：站在该节点视角下，这步棋有多好
+            current.wins += v
+            # 核心：往父节点走时，视角取反
+            # 因为父节点的 wins 是相对于父节点那个玩家的
+            v = -v
+            current = current.parent
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：
     # 1.
@@ -342,7 +356,7 @@ def collect_data(agent, games=100):
             while not game.public_board.is_empty():
                 curr_idx = game.current_player_idx
                 state = game.get_observation_for_player(curr_idx)
-                obs = game.state_to_vector_new(state)
+                obs = game.state_to_vector_np(state)
 
                 move, _ = agent.decide(game)
                 episode_data.append((obs, curr_idx))

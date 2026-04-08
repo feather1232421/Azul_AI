@@ -169,7 +169,7 @@ def train(
     )
 
     # 建模型
-    model = AzulNet(obs_dim=562, action_dim=180).to(device)
+    model = AzulNet(obs_dim=567, action_dim=180).to(device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -229,7 +229,7 @@ def train(
             # value loss: z in {-1,0,1}
             value_loss = F.mse_loss(value_pred, z)
 
-            loss = policy_loss + value_loss
+            loss = policy_loss + 0.5 * value_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -255,7 +255,7 @@ def train(
         )
 
         print(
-            f"[Epoch {epoch:02d}/{epochs}] "
+            f"[Epoch {epoch:02d}/{start_epoch+epochs-1}] "
             f"Train Loss: {train_loss:.4f} "
             f"(P: {train_policy_loss:.4f}, V: {train_value_loss:.4f}) "
             f"| Train Top1: {train_top1:.4f} "
@@ -272,7 +272,7 @@ def train(
                 "epoch": epoch,
                 "best_val_loss": best_val_loss
             }, save_path)
-            print(f"  -> Saved best model to {save_path}")
+            print(f" -> Saved best model to {save_path}")
 
     print("Training finished.")
     print("Best val loss:", best_val_loss)
@@ -281,12 +281,12 @@ def train(
 if __name__ == "__main__":
     train(
         data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
-        save_path="azul_net_v2.pt",
+        save_path="azul_net_v3.pt",
         resume_path="azul_net_best.pt",
         batch_size=256,
         lr=5e-4,
         weight_decay=1e-4,
-        epochs=10,
+        epochs=15,
         train_ratio=0.9,
         seed=42,
     )

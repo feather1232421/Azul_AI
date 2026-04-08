@@ -93,6 +93,8 @@ class AzulGame:
 
         # ... 执行真正的 pick 和 add ...
         self._apply_move(source, color, target_row)
+        if self.is_round_over():
+            self._internal_scoring_flow()
 
     def _apply_move(self,source, color, target_row):
         player = self.players[self.current_player_idx]
@@ -210,6 +212,73 @@ class AzulGame:
             "opponents": [p.to_dict() for p in sorted_players[1:]]
         }
         return state
+
+    def state_to_vector_np(sefl, state):
+        # 预分配 567 维空间
+        vec = np.zeros(567, dtype=np.float32)
+        ptr = 0
+
+        # --- 1. 工厂 (120维) ---
+        # 每个工厂 4 格，每格 6 位 one-hot
+        factories = np.array(state['factories'])  # 假设是 (5, 4)
+        for tile in factories.flatten():
+            # tile 是 0-5，直接在偏移量上填 1
+            vec[ptr + tile] = 1.0
+            ptr += 6
+
+        # --- 2. 中心 (6维) ---
+        center = state['center']
+        for tile in center:
+            if 1 <= tile <= 6:
+                vec[ptr + tile - 1] += 1.0  # 统计法，不需要 one-hot
+        ptr += 6
+
+        # --- 3. 我方状态 ---
+        me = state['me']
+
+        # 墙面 (25维): 直接用 flatten 覆盖
+        wall = np.array(me['wall'], dtype=np.float32).flatten()
+        vec[ptr: ptr + 25] = wall
+        ptr += 25
+
+        # 准备区 (150维): 5行 * 5格 * 6(one-hot)
+        for line in me['pattern_lines']:
+            # 补齐到 5 格
+            padded = line + [0] * (5 - len(line))
+            for tile in padded:
+                vec[ptr + tile] = 1.0
+                ptr += 6
+
+        # 分数归一化 (1维)
+        vec[ptr] = me['score'] / 150.0
+        ptr += 1
+
+        # 地板 (42维): 7格 * 6(one-hot)
+        floor = (me['floor'] + [0] * 7)[:7]
+        for tile in floor:
+            vec[ptr + tile] = 1.0
+            ptr += 6
+
+        # --- 4. 对方状态 (同样逻辑，省略重复部分，假设偏移量对齐) ---
+        # ... 这里重复一遍 me 的逻辑填充对方数据 ...
+        # 假设填充完后 ptr 到达了 562
+        ptr = 562
+
+        # --- 5. 灵魂特征 (新增的 5 维) ---
+        # 先手标志 (假设 6 代表 1号标)
+        vec[ptr] = 1.0 if 6 in me['floor'] else 0.0
+        vec[ptr + 1] = 1.0 if any(6 in opp['floor'] for opp in state['opponents']) else 0.0
+
+        # 进度感知
+        vec[ptr + 2] = sum(row.count(True) for row in me['wall']) / 25.0
+        # 对方进度也得看，不然不知道对面要赢了
+        opp_wall = state['opponents'][0]['wall']
+        vec[ptr + 3] = sum(row.count(True) for row in opp_wall) / 25.0
+
+        # 分差
+        vec[ptr + 4] = (me['score'] - state['opponents'][0]['score']) / 50.0
+
+        return vec
 
     def state_to_vector_new(self, state):
         features = []
@@ -449,6 +518,18 @@ class AzulGame:
         new_game.players = [p.clone_for_search() for p in self.players]
         return new_game
 
+    # 二人局专用
+    def get_game_result(self):
+        score0 = self.players[0].look_score()
+        score1 = self.players[1].look_score()
+
+        if score0 > score1:
+            return 0
+        elif score1 > score0:
+            return 1
+        else:
+            return -1
+
 
 class PublicBoard:
     def __init__(self, num_players=2):
@@ -600,6 +681,7 @@ class PublicBoard:
     def clone_for_search(self):
         new_publicboard = PublicBoard.__new__(PublicBoard)
         new_publicboard.factories = [f[:] for f in self.factories]
+        new_publicboard.factory_count = self.factory_count
         new_publicboard.center = self.center[:]
         new_publicboard.bag = self.bag[:]
         new_publicboard.discard_pile = self.discard_pile[:]
@@ -867,6 +949,8 @@ class PlayerBoard:
         new_playerboard.pattern_lines = [line[:] for line in self.pattern_lines]
         return new_playerboard
 
+    def look_score(self):
+        return self.score
 
 if __name__ == "__main__":
     game = AzulGame()
