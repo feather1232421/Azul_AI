@@ -69,7 +69,7 @@ class AzulGame:
         self.public_board.refill_factories()
         if self.next_round_first_player is not None:
             self.first_player = self.next_round_first_player
-            self.current_player_idx = self.first_player
+        self.current_player_idx = self.first_player
         self.next_round_first_player = None
 
     def get_current_player(self):

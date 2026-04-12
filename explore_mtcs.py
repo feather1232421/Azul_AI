@@ -71,7 +71,13 @@ class MCTSNode:
         return len(self.children) > 0
 
     def best_child(self, C=1.4):
-        return max(self.children, key=lambda c: c.ucb_score(C))
+        def score(child):
+            # child.wins / child.visits 是“子节点行动方视角”的价值。
+            # 对当前节点来说，走到这个 child 后轮到对手，因此 exploitation 要取反。
+            q_value = 0.0 if child.visits == 0 else -(child.wins / child.visits)
+            return q_value + C * child.prior * math.sqrt(self.visits + 1e-8) / (1 + child.visits)
+
+        return max(self.children, key=score)
 
     # # new
     # def best_child(self, root_player_idx, C=1.4):
@@ -92,7 +98,16 @@ class MCTSNode:
 
 
 class MCTSAgent:
-    def __init__(self, n_simulations=200, my_player_idx=0, net=None, device=None, action_dim=180):
+    def __init__(
+        self,
+        n_simulations=200,
+        my_player_idx=0,
+        net=None,
+        device=None,
+        action_dim=180,
+        use_policy=True,
+        use_value=True,
+    ):
         self.n_simulations = n_simulations
         # 当前二人零和版本中，my_player_idx 不再参与 value 语义
         self.my_player_idx = my_player_idx
@@ -101,6 +116,8 @@ class MCTSAgent:
         self.net.to(self.device)
         self.net.eval()
         self.action_dim = action_dim
+        self.use_policy = use_policy
+        self.use_value = use_value
 
     def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
@@ -131,13 +148,19 @@ class MCTSAgent:
         with torch.no_grad():
             policy_logits, value_logit = self.net(obs)
             # value_logit 是一个标量，可以用 item()
-            value = torch.tanh(value_logit).item()
+            value = torch.tanh(value_logit).item() if self.use_value else 0.0
 
             # policy_logits 需要去掉 batch 维度，转回 CPU 上的 numpy 或 list
             # 这样你在 compute_softmax_over_legal 里访问比较快
             policy_vector = policy_logits.squeeze(0).cpu().numpy()
 
         return policy_vector, value
+
+    def _get_priors(self, policy_logits, legal_moves):
+        if self.use_policy:
+            return compute_softmax_over_legal(policy_logits, legal_moves)
+        uniform_prior = 1.0 / len(legal_moves)
+        return {action: uniform_prior for action in legal_moves}
 
     def _search(self, game):
         legal = game.get_legal_moves()
@@ -151,7 +174,7 @@ class MCTSAgent:
         # 先对 root 做一次 evaluate + expand
         policy_logits, _ = self._evaluate(root.game)
         legal_moves = root.game.get_legal_moves()
-        priors = compute_softmax_over_legal(policy_logits, legal_moves)
+        priors = self._get_priors(policy_logits, legal_moves)
         for action, p in priors.items():
             root.add_child(action, prior=p)
 
@@ -168,7 +191,7 @@ class MCTSAgent:
                 # Expansion + Evaluation
                 policy_logits, value = self._evaluate(node.game)
                 legal_moves = node.game.get_legal_moves()
-                priors = compute_softmax_over_legal(policy_logits, legal_moves)
+                priors = self._get_priors(policy_logits, legal_moves)
                 for action, p in priors.items():
                     node.add_child(action, prior=p)
 
@@ -187,8 +210,8 @@ class MCTSAgent:
         pi = self._build_pi_from_root(root)
 
         # 搜索结束后，打印 root 的子节点统计
-        for child in sorted(root.children, key=lambda c: -c.visits)[:5]:
-            q = child.wins / child.visits if child.visits > 0 else 0
+        for child in sorted(root.children, key=lambda c: -c.visits)[:2]:
+            q = -(child.wins / child.visits) if child.visits > 0 else 0
             print(
                 f"action={child.action} visits={child.visits} wins={child.wins:.2f} Q={q:.3f} prior={child.prior:.3f}")
 
@@ -215,9 +238,9 @@ class MCTSAgent:
         winner = node.game.get_game_result()
         if winner == -1:
             return 0.0  # 平局
-        # 关键：node.game.current_player_idx 是当前“轮到”谁走
-        # 如果赢家是这个人，返回 1.0；如果是对手，返回 -1.0
-        return 1.0 if winner == node.game.current_player_idx else -1.0
+        # value 定义为当前节点行动方视角下的终局结果
+        current_player = node.game.current_player_idx
+        return 1.0 if winner == current_player else -1.0
 
     def _backprop(self, node, value):
         # value: 神经网络或终局算出的值 (针对 node.game 的当前玩家)

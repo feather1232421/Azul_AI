@@ -65,7 +65,7 @@ from tqdm import tqdm
 
 
 @torch.no_grad()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, value_loss_weight=1.0):
     model.eval()
 
     total_loss = 0.0
@@ -96,14 +96,14 @@ def evaluate(model, loader, device):
         # value loss: z in {-1,0,1}
         value_loss = F.mse_loss(value_pred, z)
 
-        loss = policy_loss + value_loss
+        loss = policy_loss + value_loss_weight * value_loss
 
         total_loss += loss.item() * obs.size(0)
         total_policy_loss += policy_loss.item() * obs.size(0)
         total_value_loss += value_loss.item() * obs.size(0)
 
         # 一个“近似可看”的指标：argmax 是否和 pi 的 argmax 一致
-        pred_action = policy_logits.argmax(dim=1)
+        pred_action = masked_logits.argmax(dim=1)
         target_action = pi.argmax(dim=1)
         total_top1_match += (pred_action == target_action).sum().item()
         total_samples += obs.size(0)
@@ -129,6 +129,7 @@ def train(
     train_ratio=0.9,
     seed=42,
     resume_path=None,   # 👈 新增
+    value_loss_weight=0.1,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -229,7 +230,7 @@ def train(
             # value loss: z in {-1,0,1}
             value_loss = F.mse_loss(value_pred, z)
 
-            loss = policy_loss +  value_loss
+            loss = policy_loss + value_loss_weight * value_loss
 
             optimizer.zero_grad()
             loss.backward()
@@ -239,7 +240,7 @@ def train(
             total_policy_loss += policy_loss.item() * obs.size(0)
             total_value_loss += value_loss.item() * obs.size(0)
 
-            pred_action = policy_logits.argmax(dim=1)
+            pred_action = masked_logits.argmax(dim=1)
             kl = (pi * (torch.log(pi + 1e-8) - log_probs)).sum(dim=-1).mean()
             target_action = pi.argmax(dim=1)
             total_top1_match += (pred_action == target_action).sum().item()
@@ -251,7 +252,7 @@ def train(
         train_top1 = total_top1_match / total_samples
 
         val_loss, val_policy_loss, val_value_loss, val_top1 = evaluate(
-            model, val_loader, device
+            model, val_loader, device, value_loss_weight=value_loss_weight
         )
 
         print(
@@ -280,8 +281,9 @@ def train(
 
 if __name__ == "__main__":
     train(
-        data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
-        save_path="azul_net_v3.pt",
+        # data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
+        data_path="greedy_teacher_dataset.pkl",
+        save_path="azul_net_v4.pt",
         # resume_path="azul_net_best.pt",
         resume_path=None,
         batch_size=256,

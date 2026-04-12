@@ -2,7 +2,10 @@ import random
 import torch
 import numpy as np
 from config import *  # 导入你之前定义的颜色常量
-from sb3_contrib import MaskablePPO
+try:
+    from sb3_contrib import MaskablePPO
+except ImportError:
+    MaskablePPO = None
 from abandon_teach import BCPolicy
 from train_scorer import ScoreModel  # 改成你的真实文件名
 
@@ -109,6 +112,8 @@ class GreedyAgent:
 
 class PPOAgent:
     def __init__(self, path):
+        if MaskablePPO is None:
+            raise ImportError("sb3_contrib is required to use PPOAgent")
         self.model = MaskablePPO.load(path)
 
     def decide(self, game):

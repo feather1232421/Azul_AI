@@ -1,9 +1,10 @@
-from sb3_contrib import MaskablePPO
-from environment import AzulEnv
-from ai import GreedyAgent, RandomAgent, PPOAgent, BCAgent, ScoreAgent
+# from sb3_contrib import MaskablePPO
+# from environment import AzulEnv
+# from ai import GreedyAgent, RandomAgent, PPOAgent, BCAgent, ScoreAgent
 from logic import AzulGame
-from search import AzulSearchAgent
-from config import *
+from ai import RandomAgent, GreedyAgent
+# from search import AzulSearchAgent
+# from config import *
 import time
 from explore_mtcs import MCTSAgent,AzulNet,MCTSAgentGreedy
 import torch
@@ -47,8 +48,6 @@ def battle(agent_0, agent_1, games=50):
 
 if __name__ == "__main__":
     # 1. 创建环境
-    env = AzulEnv()
-
     # 2. 🌟 关键：清空内部对手池
     # 这样 env.step 内部的 advance_until_next_decision 会直接 break
 
@@ -76,20 +75,26 @@ if __name__ == "__main__":
     # )
     # model_0 = search_agent
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # device = torch.device("cpu")
     net = AzulNet(obs_dim=567, action_dim=180)
-    ckpt = torch.load("azul_net_v3.pt", map_location=device)
+    ckpt = torch.load("azul_net_v4.pt", map_location=device)
     net.load_state_dict(ckpt["model"])
     # net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
     net.to(device)
     net.eval()
-    model_0 = MCTSAgent(n_simulations=500,my_player_idx=0, net=net, device=device)
+    model_0 = MCTSAgent(
+        n_simulations=200,
+        my_player_idx=0,
+        net=net,
+        device=device,
+        use_policy=True,
+        use_value=True,
+    )
     # model_1 = PPOAgent("azul_ppo_v10.zip")
     # net = AzulNet()
     # model_0 = MCTSAgent(n_simulations=200, net=net)
     # model_0 = MCTSAgentGreedy(n_simulations=200)
-    # model_1 = GreedyAgent()
-    model_1 = RandomAgent()
-    battle(model_0, model_1, games=1)
+    model_1 = GreedyAgent()
+    # model_1 = RandomAgent()
+    battle(model_0, model_1, games=10)
 
 
