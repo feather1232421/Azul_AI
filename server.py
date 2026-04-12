@@ -5,9 +5,10 @@ import socket
 import struct
 import json
 import traceback
-from explore_mtcs import MCTSAgentGreedy
+from explore_mtcs import MCTSAgent
 from ai import GreedyAgent
-
+import torch
+from azul_net import AzulNet
 
 class AIAction(BaseModel):
     sourceId: int
@@ -172,5 +173,18 @@ def run_server(host="127.0.0.1", port=9999, agent=None):
 # =========================
 
 if __name__ == "__main__":
-    greedy_mcts = MCTSAgentGreedy(n_simulations=1000)
-    run_server(agent=GreedyAgent())
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    net = AzulNet(obs_dim=567, action_dim=180)
+    ckpt = torch.load("azul_net_v4.pt", map_location=device)
+    net.load_state_dict(ckpt["model"])
+    net.to(device)
+    net.eval()
+    model_0 = MCTSAgent(
+        n_simulations=200,
+        my_player_idx=0,
+        net=net,
+        device=device,
+        use_policy=True,
+        use_value=True,
+    )
+    run_server(agent=model_0)

@@ -78,7 +78,6 @@ if __name__ == "__main__":
     net = AzulNet(obs_dim=567, action_dim=180)
     ckpt = torch.load("azul_net_v4.pt", map_location=device)
     net.load_state_dict(ckpt["model"])
-    # net.load_state_dict(torch.load("azul_net_best.pt", map_location=device))
     net.to(device)
     net.eval()
     model_0 = MCTSAgent(

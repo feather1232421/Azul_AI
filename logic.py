@@ -516,6 +516,8 @@ class AzulGame:
 
     def load_from_table_data(self, table_data):
         self.current_player_idx = 0
+        self.first_player = self.current_player_idx
+        self.next_round_first_player = None
         self.num_players = 1 + len(table_data.opponents)
         # 这里先只重建基础对象壳子
         self.public_board = PublicBoard(self.num_players)
@@ -526,6 +528,12 @@ class AzulGame:
         self.players[0]._load_player(table_data.me)
         for i in range(len(table_data.opponents)):
             self.players[i+1]._load_player(table_data.opponents[i])
+
+        # 如果首玩家标记已经在某个玩家的 floor，中途重建时也要恢复下一轮先手。
+        for idx, player in enumerate(self.players):
+            if FIRST_PLAYER in player.floor:
+                self.next_round_first_player = idx
+                break
 
     def clone_for_search(self):
         new_game = AzulGame.__new__(AzulGame)
@@ -951,7 +959,10 @@ class PlayerBoard:
         # floor
         for i in range(7):
             if not player.loseAreas[i].empty:
-                self.floor.append(player.loseAreas[i].color)
+                if player.loseAreas[i].color == 0:
+                    self.floor.append(FIRST_PLAYER)
+                else:
+                    self.floor.append(player.loseAreas[i].color)
 
         # patten_line
         for i in range(5):
