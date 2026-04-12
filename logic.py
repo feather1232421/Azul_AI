@@ -261,7 +261,26 @@ class AzulGame:
 
         # --- 4. 对方状态 (同样逻辑，省略重复部分，假设偏移量对齐) ---
         # ... 这里重复一遍 me 的逻辑填充对方数据 ...
-        # 假设填充完后 ptr 到达了 562
+        # --- 4. 对方状态 ---
+        for opp in state['opponents']:
+            opp_wall = np.array(opp['wall'], dtype=np.float32).flatten()
+            vec[ptr: ptr + 25] = opp_wall
+            ptr += 25
+
+            for line in opp['pattern_lines']:
+                padded = line + [0] * (5 - len(line))
+                for tile in padded:
+                    vec[ptr + tile] = 1.0
+                    ptr += 6
+
+            vec[ptr] = opp['score'] / 150.0
+            ptr += 1
+
+            floor = (opp['floor'] + [0] * 7)[:7]
+            for tile in floor:
+                vec[ptr + tile] = 1.0
+                ptr += 6
+        # 然后再填 5 维灵魂特征
         ptr = 562
 
         # --- 5. 灵魂特征 (新增的 5 维) ---
@@ -513,7 +532,6 @@ class AzulGame:
         new_game.next_round_first_player = self.next_round_first_player
         new_game.current_player_idx = self.current_player_idx
         new_game.first_player = self.first_player
-        new_game.is_game_over = self.is_game_over
         new_game.public_board = self.public_board.clone_for_search()
         new_game.players = [p.clone_for_search() for p in self.players]
         return new_game

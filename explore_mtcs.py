@@ -148,28 +148,30 @@ class MCTSAgent:
 
         self.my_player_idx = game.current_player_idx
         root = MCTSNode(game.clone_for_search())
+        # 先对 root 做一次 evaluate + expand
+        policy_logits, _ = self._evaluate(root.game)
+        legal_moves = root.game.get_legal_moves()
+        priors = compute_softmax_over_legal(policy_logits, legal_moves)
+        for action, p in priors.items():
+            root.add_child(action, prior=p)
 
         for _ in range(self.n_simulations):
             node = root
-            # 1. Selection
-            while node.is_expanded() and not node.game.is_game_over():
+            # Selection: 一直走到叶子（没有子节点的节点）
+            while node.children and not node.game.is_game_over():
                 node = node.best_child(C=1.4)
 
-            # 2. Expansion & Evaluation
+            # 到叶子了
             if node.game.is_game_over():
                 value = self._terminal_value(node)
             else:
-                # 核心：一次推理，拿回两个结果
+                # Expansion + Evaluation
                 policy_logits, value = self._evaluate(node.game)
-
                 legal_moves = node.game.get_legal_moves()
                 priors = compute_softmax_over_legal(policy_logits, legal_moves)
-
-                # 建立子节点
                 for action, p in priors.items():
                     node.add_child(action, prior=p)
 
-            # 3. Backprop
             self._backprop(node, value)
 
         if not root.children:
