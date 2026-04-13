@@ -5,15 +5,28 @@ import socket
 import struct
 import json
 import traceback
+import os
+import sys
 from explore_mtcs import MCTSAgent
 from ai import GreedyAgent
 import torch
 from azul_net import AzulNet
 
+
 class AIAction(BaseModel):
     sourceId: int
     color: int
     destinationId: int
+
+
+def resource_dir() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def model_path(filename: str) -> str:
+    return os.path.join(resource_dir(), filename)
 
 # =========================
 # 1. 网络基础
@@ -175,7 +188,7 @@ def run_server(host="127.0.0.1", port=9999, agent=None):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net = AzulNet(obs_dim=567, action_dim=180)
-    ckpt = torch.load("azul_net_v4.pt", map_location=device)
+    ckpt = torch.load(model_path("azul_net_v4.pt"), map_location=device)
     net.load_state_dict(ckpt["model"])
     net.to(device)
     net.eval()

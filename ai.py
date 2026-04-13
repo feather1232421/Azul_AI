@@ -2,12 +2,6 @@ import random
 import torch
 import numpy as np
 from config import *  # 导入你之前定义的颜色常量
-try:
-    from sb3_contrib import MaskablePPO
-except ImportError:
-    MaskablePPO = None
-from abandon_teach import BCPolicy
-from train_scorer import ScoreModel  # 改成你的真实文件名
 
 
 class HumanAgent:
@@ -112,8 +106,10 @@ class GreedyAgent:
 
 class PPOAgent:
     def __init__(self, path):
-        if MaskablePPO is None:
-            raise ImportError("sb3_contrib is required to use PPOAgent")
+        try:
+            from sb3_contrib import MaskablePPO
+        except ImportError as exc:
+            raise ImportError("sb3_contrib is required to use PPOAgent") from exc
         self.model = MaskablePPO.load(path)
 
     def decide(self, game):
@@ -150,6 +146,8 @@ class PPOAgent:
 
 class BCAgent:
     def __init__(self, path, target_player_idx=0, device=None):
+        from abandon_teach import BCPolicy
+
         self.target_player_idx = target_player_idx
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -216,6 +214,8 @@ class BCAgent:
 
 class ScoreAgent:
     def __init__(self, path, target_player_idx=0, device=None):
+        from train_scorer import ScoreModel
+
         self.target_player_idx = target_player_idx
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 

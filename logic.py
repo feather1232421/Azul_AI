@@ -525,6 +525,8 @@ class AzulGame:
 
         self.public_board._load_factories(table_data.factories)
         self.public_board._load_center(table_data.center)
+        self.public_board._load_discard(table_data.loseTokens)
+        self.public_board._load_bag(table_data.remainTokens)
         self.players[0]._load_player(table_data.me)
         for i in range(len(table_data.opponents)):
             self.players[i+1]._load_player(table_data.opponents[i])
@@ -560,6 +562,7 @@ class AzulGame:
 
 class PublicBoard:
     def __init__(self, num_players=2):
+        self.rng = random.Random()
 
         # 1. 初始化布袋 (Bag)
         self.bag = []
@@ -586,7 +589,7 @@ class PublicBoard:
         # 1-5号颜色各 20 块
         for color in range(1, 6):
             self.bag.extend([color] * BAG_INITIAL_COUNT)
-        random.shuffle(self.bag)
+        self.rng.shuffle(self.bag)
 
     def is_empty(self):
         # 检查公共板上是否已经没砖了（工厂和中心区全空）
@@ -620,7 +623,7 @@ class PublicBoard:
         # print("--- 布袋已空，正在回收弃牌堆 ---")
         self.bag = self.discard_pile[:]
         self.discard_pile = []
-        random.shuffle(self.bag)
+        self.rng.shuffle(self.bag)
 
     def display_status(self):
         # 在控制台打印当前场面，方便调试
@@ -705,14 +708,31 @@ class PublicBoard:
                 else:
                     self.center.append(center[i].color)
 
+    def _load_discard(self, discard_tokens):
+        self.discard_pile = []
+        for token_data in discard_tokens:
+            if token_data.color in range(1, 6) and token_data.number > 0:
+                self.discard_pile.extend([token_data.color] * token_data.number)
+
+    def _load_bag(self, remain_tokens):
+        self.bag = []
+        for token_data in remain_tokens:
+            if token_data.color in range(1, 6) and token_data.number > 0:
+                self.bag.extend([token_data.color] * token_data.number)
+        self.rng.shuffle(self.bag)
+                    
     def clone_for_search(self):
         new_publicboard = PublicBoard.__new__(PublicBoard)
+        new_publicboard.rng = random.Random()
+        new_publicboard.rng.setstate(self.rng.getstate())
         new_publicboard.factories = [f[:] for f in self.factories]
         new_publicboard.factory_count = self.factory_count
+        new_publicboard.num_players = self.num_players
         new_publicboard.center = self.center[:]
         new_publicboard.bag = self.bag[:]
         new_publicboard.discard_pile = self.discard_pile[:]
         return new_publicboard
+
 
 
 class PlayerBoard:

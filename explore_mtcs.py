@@ -33,6 +33,13 @@ def compute_softmax_over_legal(policy_logits, legal_moves):
     return priors
 
 
+def randomize_hidden_bag_for_search(game):
+    search_game = game.clone_for_search()
+    # Remaining bag composition is inferable, but the order is hidden.
+    search_game.public_board.rng.shuffle(search_game.public_board.bag)
+    return search_game
+
+
 class MCTSNode:
     def __init__(self, game=None, parent=None, action=None, prior=0.0):
         self.children = []  # 存储子节点对象
@@ -101,6 +108,7 @@ class MCTSAgent:
     def __init__(
         self,
         n_simulations=200,
+        n_determinizations=4,
         my_player_idx=0,
         net=None,
         device=None,
@@ -109,6 +117,7 @@ class MCTSAgent:
         use_value=True,
     ):
         self.n_simulations = n_simulations
+        self.n_determinizations = max(1, n_determinizations)
         # 当前二人零和版本中，my_player_idx 不再参与 value 语义
         self.my_player_idx = my_player_idx
         self.device = device if device is not None else torch.device("cpu")
@@ -162,6 +171,67 @@ class MCTSAgent:
         uniform_prior = 1.0 / len(legal_moves)
         return {action: uniform_prior for action in legal_moves}
 
+    def _build_mask(self, game):
+        legal = game.get_legal_moves()
+        mask = np.zeros(self.action_dim, dtype=np.float32)
+        for move in legal:
+            idx = REVERSE_LOOKUP[move]
+            mask[idx] = 1.0
+        return legal, mask
+
+    def _expand_root(self, root):
+        policy_logits, _ = self._evaluate(root.game)
+        legal_moves = root.game.get_legal_moves()
+        priors = self._get_priors(policy_logits, legal_moves)
+        for action, p in priors.items():
+            root.add_child(action, prior=p)
+
+    def _run_single_search(self, root_game, n_simulations):
+        root = MCTSNode(root_game)
+        self._expand_root(root)
+
+        for _ in range(n_simulations):
+            node = root
+            while node.children and not node.game.is_game_over():
+                node = node.best_child(C=1.4)
+
+            if node.game.is_game_over():
+                value = self._terminal_value(node)
+            else:
+                policy_logits, value = self._evaluate(node.game)
+                legal_moves = node.game.get_legal_moves()
+                priors = self._get_priors(policy_logits, legal_moves)
+                for action, p in priors.items():
+                    node.add_child(action, prior=p)
+
+            self._backprop(node, value)
+
+        return root
+
+    def _aggregate_roots(self, roots):
+        total_visits = {}
+        total_wins = {}
+        total_priors = {}
+
+        for root in roots:
+            for child in root.children:
+                action = child.action
+                total_visits[action] = total_visits.get(action, 0) + child.visits
+                total_wins[action] = total_wins.get(action, 0.0) + child.wins
+                total_priors[action] = total_priors.get(action, 0.0) + child.prior
+
+        return total_visits, total_wins, total_priors
+
+    def _build_pi_from_visit_dict(self, visit_dict):
+        pi = np.zeros(self.action_dim, dtype=np.float32)
+        for action, visits in visit_dict.items():
+            idx = REVERSE_LOOKUP[action]
+            pi[idx] = visits
+        s = pi.sum()
+        if s > 0:
+            pi /= s
+        return pi
+
     def _search(self, game):
         legal = game.get_legal_moves()
         mask = np.zeros(180, dtype=np.float32)
@@ -170,7 +240,7 @@ class MCTSAgent:
             mask[idx] = 1.0
 
         self.my_player_idx = game.current_player_idx
-        root = MCTSNode(game.clone_for_search())
+        root = MCTSNode(randomize_hidden_bag_for_search(game))
         # 先对 root 做一次 evaluate + expand
         policy_logits, _ = self._evaluate(root.game)
         legal_moves = root.game.get_legal_moves()
@@ -227,12 +297,50 @@ class MCTSAgent:
             pi /= s
         return pi
 
+    def _search_multi(self, game):
+        legal, mask = self._build_mask(game)
+
+        self.my_player_idx = game.current_player_idx
+        n_worlds = max(1, min(self.n_determinizations, self.n_simulations))
+        sims_per_world = self.n_simulations // n_worlds
+        extra = self.n_simulations % n_worlds
+
+        roots = []
+        for world_idx in range(n_worlds):
+            sims_this_world = sims_per_world + (1 if world_idx < extra else 0)
+            if sims_this_world <= 0:
+                continue
+            root_game = randomize_hidden_bag_for_search(game)
+            roots.append(self._run_single_search(root_game, sims_this_world))
+
+        total_visits, total_wins, total_priors = self._aggregate_roots(roots)
+
+        if not total_visits:
+            print("not root children")
+            move = legal[0]
+            pi = np.zeros(self.action_dim, dtype=np.float32)
+            idx = REVERSE_LOOKUP[move]
+            pi[idx] = 1.0
+            return move, pi, mask
+
+        move = max(total_visits.items(), key=lambda item: item[1])[0]
+        pi = self._build_pi_from_visit_dict(total_visits)
+
+        for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:2]:
+            wins = total_wins.get(action, 0.0)
+            q = -(wins / visits) if visits > 0 else 0.0
+            avg_prior = total_priors.get(action, 0.0) / len(roots)
+            print(
+                f"action={action} visits={visits} wins={wins:.2f} Q={q:.3f} prior={avg_prior:.3f}")
+
+        return move, pi, mask
+
     def decide(self, game):
-        move, _, _ = self._search(game)
+        move, _, _ = self._search_multi(game)
         return move
 
     def decide_with_info(self, game):
-        return self._search(game)
+        return self._search_multi(game)
 
     def _terminal_value(self, node):
         winner = node.game.get_game_result()
@@ -333,7 +441,7 @@ class MCTSAgentGreedy:
         # 决策时记录当前是谁在走
         self.my_player_idx = game.current_player_idx
 
-        root = MCTSNode(copy.deepcopy(game))
+        root = MCTSNode(randomize_hidden_bag_for_search(game))
 
         for _ in range(self.n_simulations):
             node = root
