@@ -66,6 +66,7 @@
 - `get_dataset.py`: 采集 MCTS self-play 数据或 Greedy 教师数据。
 - `train_mcts_nn.py`: 训练 policy-value 网络。
 - `battle.py`: 多局对战测试脚本。
+- `server.py`: 使用网络和AI在Unity种进行对战。
 
 ## 🔧 常用命令
 - 采集 Greedy 教师数据：
