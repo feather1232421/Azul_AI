@@ -30,7 +30,6 @@
 - [x] **策略蒸馏 (Distillation)**
   - 采集 N-Step 搜索数据，通过行为克隆 (BC) 预训练神经网络。
   - 将 BC 权重注入神经网络架构。
-  - 原始特征该为one-hot 编码，PPO胜率得到
 - [ ] **强化学习终极目标 (MCTS + NN)**
   - [x] 实现 MCTS 树搜索框架，支持 Policy Prior 与 Value Evaluation。
   - [x] 训练目标重构：从 `(obs, action, z)` 转向 `(obs, pi, z)` 分布拟合。
