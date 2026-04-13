@@ -86,12 +86,9 @@ python get_dataset.py --mode mcts --games 300 --output mcts_v4_selfplay.pkl --si
 ```bash
 python battle.py
 ```
+- 与Unity互动（上方链接提供的仓库）：
+  - 默认使用MCTS+azul_net_v4.pt模型，直接运行：
+```bash
+python server.py
+```
 
-## 📝 当前迭代建议
-- 先保留 `azul_net_v4.pt` 作为基线模型，不要覆盖。
-- 使用修复后的 `policy + value MCTS` 采集 self-play 数据。
-- 训练 `v5` 后，至少进行以下 arena 对比：
-  - `v5` vs `v4`
-  - `v5` vs `GreedyAgent`
-  - `v5` vs `RandomAgent`
-- 只有在整体强度更好时，再将 `v5` 升级为新的 best model。
