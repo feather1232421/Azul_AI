@@ -279,11 +279,11 @@ class MCTSAgent:
         move = max(root.children, key=lambda c: c.visits).action
         pi = self._build_pi_from_root(root)
 
-        # 搜索结束后，打印 root 的子节点统计
-        for child in sorted(root.children, key=lambda c: -c.visits)[:2]:
-            q = -(child.wins / child.visits) if child.visits > 0 else 0
-            print(
-                f"action={child.action} visits={child.visits} wins={child.wins:.2f} Q={q:.3f} prior={child.prior:.3f}")
+        # # 搜索结束后，打印 root 的子节点统计
+        # for child in sorted(root.children, key=lambda c: -c.visits)[:2]:
+        #     q = -(child.wins / child.visits) if child.visits > 0 else 0
+        #     print(
+        #         f"action={child.action} visits={child.visits} wins={child.wins:.2f} Q={q:.3f} prior={child.prior:.3f}")
 
         return move, pi, mask
 
@@ -326,12 +326,12 @@ class MCTSAgent:
         move = max(total_visits.items(), key=lambda item: item[1])[0]
         pi = self._build_pi_from_visit_dict(total_visits)
 
-        for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:2]:
-            wins = total_wins.get(action, 0.0)
-            q = -(wins / visits) if visits > 0 else 0.0
-            avg_prior = total_priors.get(action, 0.0) / len(roots)
-            print(
-                f"action={action} visits={visits} wins={wins:.2f} Q={q:.3f} prior={avg_prior:.3f}")
+        # for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:2]:
+        #     wins = total_wins.get(action, 0.0)
+        #     q = -(wins / visits) if visits > 0 else 0.0
+        #     avg_prior = total_priors.get(action, 0.0) / len(roots)
+        #     print(
+        #         f"action={action} visits={visits} wins={wins:.2f} Q={q:.3f} prior={avg_prior:.3f}")
 
         return move, pi, mask
 

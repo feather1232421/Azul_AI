@@ -75,6 +75,7 @@ if __name__ == "__main__":
     # )
     # model_0 = search_agent
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     net = AzulNet(obs_dim=567, action_dim=180)
     ckpt = torch.load("azul_net_v4.pt", map_location=device)
     net.load_state_dict(ckpt["model"])
@@ -94,6 +95,6 @@ if __name__ == "__main__":
     # model_0 = MCTSAgentGreedy(n_simulations=200)
     model_1 = GreedyAgent()
     # model_1 = RandomAgent()
-    battle(model_0, model_1, games=10)
+    battle(model_0, model_1, games=1)
 
 
