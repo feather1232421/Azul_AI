@@ -36,7 +36,7 @@
   - [x] 修复 MCTS 选择阶段的视角一致性问题（`best_child` 中的 exploitation 项）。
   - [x] 建立 Greedy 教师数据采集脚本，可用于冷启动训练。
   - [ ] 闭环 Self-play：通过 MCTS 迭代不断提升神经网络的先验能力。
-  - [ ] 性能对标：初步目标是超越人类新手水平。
+  - [ ] 性能对标：初步目标是超越人类新手水平，最终目标是达到或超越熟手或者专家水平。
 
 ## 📊 算法细节 (Algorithm Details)
 - **State Representation**:
