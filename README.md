@@ -17,11 +17,7 @@
 - **UI & Client**: 负责游戏运行逻辑、表现层、用户交互及真人对战功能。
   - 开发者: [@PXbask](https://github.com/PXbask)
   - 客户端仓库: https://github.com/PXbask/AZUL
-
-[comment]: <> (## 🎮 交互说明)
-
-[comment]: <> (  - 目前仍未实现公开逻辑交互)
-
+  
 ## 🚀 开发进度
 - [x] **基础建设**
   - 完善游戏核心逻辑，做到“命令行小游戏”
