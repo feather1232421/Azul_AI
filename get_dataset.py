@@ -127,6 +127,9 @@ if __name__ == "__main__":
     parser.add_argument("--games", type=int, default=100)
     parser.add_argument("--output", type=str, default=None)
     parser.add_argument("--sims", type=int, default=200)
+    parser.add_argument("--worlds", type=int, default=4)
+    parser.add_argument("--puct-c", type=float, default=1.0)
+    parser.add_argument("--prior-temperature", type=float, default=1.5)
     parser.add_argument("--model", type=str, default=None)
     args = parser.parse_args()
 
@@ -142,13 +145,16 @@ if __name__ == "__main__":
             net.load_state_dict(state_dict)
         agent = MCTSAgent(
             n_simulations=args.sims,
+            n_determinizations=args.worlds,
             my_player_idx=0,
             net=net,
             device=device,
             action_dim=180,
+            puct_c=args.puct_c,
+            prior_temperature=args.prior_temperature,
         )
         dataset = collect_data(agent, games=args.games)
-        output_path = args.output or "MCTS_nn_dataset_pi.pkl"
+        output_path = args.output or "MCTS_nn_dataset_pi_t15_c10.pkl"
 
     print("dataset size =", len(dataset))
     print("sample =", dataset[0])

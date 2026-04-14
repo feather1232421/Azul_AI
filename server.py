@@ -188,12 +188,12 @@ def run_server(host="127.0.0.1", port=9999, agent=None):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net = AzulNet(obs_dim=567, action_dim=180)
-    ckpt = torch.load(model_path("azul_net_v4.pt"), map_location=device)
+    ckpt = torch.load(model_path("azul_net_v5.pt"), map_location=device)
     net.load_state_dict(ckpt["model"])
     net.to(device)
     net.eval()
     model_0 = MCTSAgent(
-        n_simulations=200,
+        n_simulations=1000,
         my_player_idx=0,
         net=net,
         device=device,

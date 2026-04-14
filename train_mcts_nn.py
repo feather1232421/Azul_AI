@@ -129,7 +129,7 @@ def train(
     train_ratio=0.9,
     seed=42,
     resume_path=None,   # 👈 新增
-    value_loss_weight=0.1,
+    value_loss_weight=0.5,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -171,6 +171,8 @@ def train(
 
     # 建模型
     model = AzulNet(obs_dim=567, action_dim=180).to(device)
+    save_path = Path(save_path)
+    last_save_path = save_path.with_name(f"{save_path.stem}_last{save_path.suffix}")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -199,6 +201,7 @@ def train(
         start_epoch = 1
         best_val_loss = float("inf")
 
+    val = 0.0
     for epoch in range(start_epoch, epochs + start_epoch):
         model.train()
 
@@ -275,17 +278,28 @@ def train(
             }, save_path)
             print(f" -> Saved best model to {save_path}")
 
+        if epoch % 15 == 0:
+            torch.save({
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "epoch": epoch,
+                "val_loss": val_loss
+            }, last_save_path)
+            print(f" -> Saved epoch {epoch} model to {last_save_path}")
+
     print("Training finished.")
     print("Best val loss:", best_val_loss)
+    print("Best model path:", save_path)
+    print("Last model path:", last_save_path)
 
 
 if __name__ == "__main__":
     train(
         # data_path="MCTS_nn_dataset_pi.pkl",   # 改成你的数据文件名
-        data_path="greedy_teacher_dataset.pkl",
-        save_path="azul_net_v4.pt",
-        # resume_path="azul_net_best.pt",
-        resume_path=None,
+        data_path="mcts_dataset_pi_new.pkl",
+        save_path="azul_net_v5.pt",
+        resume_path="azul_net_v4.pt",
+        # resume_path=None,
         batch_size=256,
         lr=5e-4,
         weight_decay=1e-4,

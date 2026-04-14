@@ -2,24 +2,27 @@ import math
 import copy
 import random
 import time
+import json
 from ai import GreedyAgent
 import torch
 import torch.nn as nn
 from logic import AzulGame
 import pickle
+from pathlib import Path
 from config import *
 import numpy as np
 from azul_net import AzulNet
 
 
-def compute_softmax_over_legal(policy_logits, legal_moves):
+def compute_softmax_over_legal(policy_logits, legal_moves, temperature=1.0):
     priors = {}
+    temperature = max(float(temperature), 1e-6)
 
     # 1. 取出合法动作对应的 logits
     logits = []
     for m in legal_moves:
         idx = REVERSE_LOOKUP[m]
-        logits.append(policy_logits[idx].item())
+        logits.append(policy_logits[idx].item() / temperature)
 
     # 2. 数值稳定的 softmax（减 max）
     max_logit = max(logits)
@@ -115,6 +118,11 @@ class MCTSAgent:
         action_dim=180,
         use_policy=True,
         use_value=True,
+        puct_c=1.4,
+        prior_temperature=1.0,
+        debug_log_path=None,
+        debug_top_k=8,
+        debug_label=None,
     ):
         self.n_simulations = n_simulations
         self.n_determinizations = max(1, n_determinizations)
@@ -127,6 +135,12 @@ class MCTSAgent:
         self.action_dim = action_dim
         self.use_policy = use_policy
         self.use_value = use_value
+        self.puct_c = puct_c
+        self.prior_temperature = prior_temperature
+        self.debug_log_path = Path(debug_log_path) if debug_log_path else None
+        self.debug_top_k = debug_top_k
+        self.debug_label = debug_label or "mcts"
+        self.debug_step = 0
 
     def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
@@ -167,7 +181,11 @@ class MCTSAgent:
 
     def _get_priors(self, policy_logits, legal_moves):
         if self.use_policy:
-            return compute_softmax_over_legal(policy_logits, legal_moves)
+            return compute_softmax_over_legal(
+                policy_logits,
+                legal_moves,
+                temperature=self.prior_temperature,
+            )
         uniform_prior = 1.0 / len(legal_moves)
         return {action: uniform_prior for action in legal_moves}
 
@@ -193,7 +211,7 @@ class MCTSAgent:
         for _ in range(n_simulations):
             node = root
             while node.children and not node.game.is_game_over():
-                node = node.best_child(C=1.4)
+                node = node.best_child(C=self.puct_c)
 
             if node.game.is_game_over():
                 value = self._terminal_value(node)
@@ -232,6 +250,44 @@ class MCTSAgent:
             pi /= s
         return pi
 
+    def _write_debug_log(self, game, chosen_move, total_visits, total_wins, total_priors, roots):
+        if self.debug_log_path is None:
+            return
+
+        self.debug_log_path.parent.mkdir(parents=True, exist_ok=True)
+        root_values = []
+        for root in roots:
+            if root.children:
+                root_values.append(max((-child.wins / child.visits) if child.visits > 0 else 0.0 for child in root.children))
+
+        move_rows = []
+        n_roots = max(len(roots), 1)
+        for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:self.debug_top_k]:
+            wins = total_wins.get(action, 0.0)
+            q_value = -(wins / visits) if visits > 0 else 0.0
+            move_rows.append({
+                "move": list(action),
+                "visits": int(visits),
+                "prior": float(total_priors.get(action, 0.0) / n_roots),
+                "q": float(q_value),
+            })
+
+        payload = {
+            "tag": f"{self.debug_label}_step_{self.debug_step}",
+            "step": self.debug_step,
+            "current_player": game.current_player_idx,
+            "scores": [player.score for player in game.players],
+            "n_simulations": self.n_simulations,
+            "n_determinizations": self.n_determinizations,
+            "legal_moves": int(len(game.get_legal_moves())),
+            "chosen_move": list(chosen_move),
+            "root_value_mean": float(sum(root_values) / len(root_values)) if root_values else None,
+            "moves": move_rows,
+        }
+        with self.debug_log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+        self.debug_step += 1
+
     def _search(self, game):
         legal = game.get_legal_moves()
         mask = np.zeros(180, dtype=np.float32)
@@ -252,7 +308,7 @@ class MCTSAgent:
             node = root
             # Selection: 一直走到叶子（没有子节点的节点）
             while node.children and not node.game.is_game_over():
-                node = node.best_child(C=1.4)
+                node = node.best_child(C=self.puct_c)
 
             # 到叶子了
             if node.game.is_game_over():
@@ -325,6 +381,7 @@ class MCTSAgent:
 
         move = max(total_visits.items(), key=lambda item: item[1])[0]
         pi = self._build_pi_from_visit_dict(total_visits)
+        self._write_debug_log(game, move, total_visits, total_wins, total_priors, roots)
 
         # for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:2]:
         #     wins = total_wins.get(action, 0.0)
