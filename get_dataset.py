@@ -1,12 +1,14 @@
-import pickle
 import argparse
-from tqdm import tqdm
-import torch
-from config import *
-from ai import GreedyAgent
+import pickle
+
 import numpy as np
+import torch
+from tqdm import tqdm
+
+from ai import GreedyAgent
+from config import ACTION_LOOKUP, REVERSE_LOOKUP
+from explore_mtcs import AzulNet, MCTSAgent
 from logic import AzulGame
-from explore_mtcs import MCTSAgent, AzulNet
 
 
 def build_action_mask(game):
@@ -22,13 +24,33 @@ def build_one_hot_policy(move):
     return pi
 
 
-def collect_data(agent, games=100):
+def choose_self_play_move(pi, sample_steps, step_idx):
+    if step_idx < sample_steps:
+        move_idx = np.random.choice(len(pi), p=pi)
+    else:
+        move_idx = int(np.argmax(pi))
+    return ACTION_LOOKUP[move_idx]
+
+
+def finalize_episode(episode, winner):
+    labeled_episode = []
+    for obs, pi, player_idx, mask in episode:
+        if winner == 2:
+            z = 0.0
+        else:
+            z = 1.0 if player_idx == winner else -1.0
+        labeled_episode.append((obs, pi, z, mask))
+    return labeled_episode
+
+
+def collect_data(agent, games=100, sample_steps=8, by_episode=True):
     data = []
 
-    for game_idx in tqdm(range(games), desc="Collecting self-play data"):
+    for _ in tqdm(range(games), desc="Collecting self-play data"):
         game = AzulGame()
         game.reset()
         episode = []
+        step_idx = 0
 
         while not game.is_game_over():
             while not game.is_round_over():
@@ -36,23 +58,17 @@ def collect_data(agent, games=100):
                 state = game.get_observation_for_player(curr_idx)
                 obs = game.state_to_vector_np(state)
 
-                # 这里的 move, pi, mask 是搜索出来的
                 _, pi, mask = agent.decide_with_info(game)
+                move = choose_self_play_move(pi, sample_steps=sample_steps, step_idx=step_idx)
 
-                # --- 核心修改：在这里进行采样 ---
-                # 1. 产生动作索引 (0-179)
-                # 注意：pi 已经归一化过了，直接用做概率
-                move_idx = np.random.choice(len(pi), p=pi)
-
-                # 2. 从索引转回真正的动作元组
-                # 假设你有一个 ACTION_LOOKUP 列表存放了所有 180 个动作
-                move = ACTION_LOOKUP[move_idx]
-                # -----------------------------
-
-                episode.append((np.array(obs, copy=True), np.array(pi, copy=True), curr_idx, np.array(mask, copy=True)))
+                episode.append((
+                    np.array(obs, copy=True),
+                    np.array(pi, copy=True),
+                    curr_idx,
+                    np.array(mask, copy=True),
+                ))
                 game.play_turn(*move)
-
-            # game._internal_scoring_flow()
+                step_idx += 1
 
         if game.players[0].score > game.players[1].score:
             winner = 0
@@ -61,21 +77,20 @@ def collect_data(agent, games=100):
         else:
             winner = 2
 
-        for obs, pi, player_idx, mask in episode:
-            if winner == 2:
-                z = 0.0
-            else:
-                z = 1.0 if player_idx == winner else -1.0
-            data.append((obs, pi, z, mask))
+        labeled_episode = finalize_episode(episode, winner)
+        if by_episode:
+            data.append(labeled_episode)
+        else:
+            data.extend(labeled_episode)
 
     return data
 
 
-def collect_greedy_data(games=100, agent=None):
+def collect_greedy_data(games=100, agent=None, by_episode=True):
     data = []
     agent = agent or GreedyAgent()
 
-    for game_idx in tqdm(range(games), desc="Collecting greedy teacher data"):
+    for _ in tqdm(range(games), desc="Collecting greedy teacher data"):
         game = AzulGame()
         game.reset()
         episode = []
@@ -105,12 +120,11 @@ def collect_greedy_data(games=100, agent=None):
         else:
             winner = 2
 
-        for obs, pi, player_idx, mask in episode:
-            if winner == 2:
-                z = 0.0
-            else:
-                z = 1.0 if player_idx == winner else -1.0
-            data.append((obs, pi, z, mask))
+        labeled_episode = finalize_episode(episode, winner)
+        if by_episode:
+            data.append(labeled_episode)
+        else:
+            data.extend(labeled_episode)
 
     return data
 
@@ -131,10 +145,12 @@ if __name__ == "__main__":
     parser.add_argument("--puct-c", type=float, default=1.0)
     parser.add_argument("--prior-temperature", type=float, default=1.5)
     parser.add_argument("--model", type=str, default=None)
+    parser.add_argument("--sample-steps", type=int, default=8)
+    parser.add_argument("--flat", action="store_true")
     args = parser.parse_args()
 
     if args.mode == "greedy":
-        dataset = collect_greedy_data(games=args.games)
+        dataset = collect_greedy_data(games=args.games, by_episode=not args.flat)
         output_path = args.output or "greedy_teacher_dataset.pkl"
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -153,11 +169,26 @@ if __name__ == "__main__":
             puct_c=args.puct_c,
             prior_temperature=args.prior_temperature,
         )
-        dataset = collect_data(agent, games=args.games)
+        dataset = collect_data(
+            agent,
+            games=args.games,
+            sample_steps=args.sample_steps,
+            by_episode=not args.flat,
+        )
         output_path = args.output or "MCTS_nn_dataset_pi_t15_c10.pkl"
 
-    print("dataset size =", len(dataset))
-    print("sample =", dataset[0])
+    if args.flat:
+        total_samples = len(dataset)
+        sample = dataset[0] if dataset else None
+        episode_count = "n/a"
+    else:
+        total_samples = sum(len(ep) for ep in dataset)
+        sample = dataset[0][0] if dataset and dataset[0] else None
+        episode_count = len(dataset)
+
+    print("episodes =", episode_count)
+    print("dataset size =", total_samples)
+    print("sample =", sample)
 
     with open(output_path, "wb") as f:
         pickle.dump(dataset, f)

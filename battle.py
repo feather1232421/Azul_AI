@@ -217,8 +217,8 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     arena_match(
         model_a_path="azul_net_v4.pt",
-        model_b_path="azul_net_v5.pt",
-        games_per_side=10,
+        model_b_path="azul_net_v6_last.pt",
+        games_per_side=5,
         n_simulations=200,
         n_determinizations=4,
         puct_c=1.0,
