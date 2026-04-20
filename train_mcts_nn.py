@@ -12,6 +12,25 @@ from azul_net import AzulNet
 from dataset import AzulMCTSDataset
 
 
+def load_raw_data(data_path=None, data_paths=None):
+    paths = []
+    if data_path is not None:
+        paths.append(Path(data_path))
+    if data_paths is not None:
+        paths.extend(Path(path) for path in data_paths)
+
+    if not paths:
+        raise ValueError("At least one data path is required.")
+
+    merged_raw_data = []
+    for path in paths:
+        with path.open("rb") as f:
+            raw_data = pickle.load(f)
+        merged_raw_data.extend(raw_data)
+
+    return merged_raw_data, paths
+
+
 @torch.no_grad()
 def evaluate(model, loader, device, value_loss_weight=1.0, loser_policy_weight=0.3):
     model.eval()
@@ -101,6 +120,7 @@ def split_loaded_data(raw_data, train_ratio=0.9, seed=42):
 
 def train(
     data_path="azul_data.pkl",
+    data_paths=None,
     save_path="azul_net_best.pt",
     batch_size=256,
     lr=1e-3,
@@ -109,8 +129,10 @@ def train(
     train_ratio=0.9,
     seed=42,
     resume_path=None,
+    resume_weights_only=False,
     value_loss_weight=0.2,
     loser_policy_weight=0.3,
+    strict_episode_split=False,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -119,8 +141,7 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    with open(data_path, "rb") as f:
-        raw_data = pickle.load(f)
+    raw_data, loaded_paths = load_raw_data(data_path=data_path, data_paths=data_paths)
 
     train_samples, val_samples, train_episodes, val_episodes, split_mode = split_loaded_data(
         raw_data,
@@ -128,6 +149,15 @@ def train(
         seed=seed,
     )
 
+    if strict_episode_split and split_mode != "episode":
+        raise ValueError(
+            "Strict episode split requested, but loaded data is not stored by episode. "
+            "Regenerate replay data with by_episode=True."
+        )
+
+    print("Loaded replay files:")
+    for path in loaded_paths:
+        print(f" - {path}")
     print(f"Loaded top-level entries: {len(raw_data)}")
     if split_mode == "episode":
         print(f"Episode split: train={train_episodes}, val={val_episodes}")
@@ -167,7 +197,13 @@ def train(
     if resume_path is not None:
         ckpt = torch.load(resume_path, map_location=device)
 
-        if isinstance(ckpt, dict) and "model" in ckpt:
+        if resume_weights_only:
+            state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+            model.load_state_dict(state_dict)
+            start_epoch = 1
+            best_val_loss = float("inf")
+            print("Loaded resume weights only.")
+        elif isinstance(ckpt, dict) and "model" in ckpt:
             model.load_state_dict(ckpt["model"])
             if "optimizer" in ckpt:
                 optimizer.load_state_dict(ckpt["optimizer"])
@@ -274,10 +310,27 @@ def train(
             )
             print(f" -> Saved epoch {epoch} model to {last_save_path}")
 
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "epoch": start_epoch + epochs - 1,
+            "best_val_loss": best_val_loss,
+        },
+        last_save_path,
+    )
+
     print("Training finished.")
     print("Best val loss:", best_val_loss)
     print("Best model path:", save_path)
     print("Last model path:", last_save_path)
+    return {
+        "best_val_loss": best_val_loss,
+        "best_model_path": str(save_path),
+        "last_model_path": str(last_save_path),
+        "split_mode": split_mode,
+        "loaded_paths": [str(path) for path in loaded_paths],
+    }
 
 
 if __name__ == "__main__":

@@ -10,6 +10,13 @@ from config import ACTION_LOOKUP, REVERSE_LOOKUP
 from explore_mtcs import AzulNet, MCTSAgent
 from logic import AzulGame
 
+DEFAULT_TEMPERATURE_SCHEDULE = (
+    (0, 1.25),
+    (12, 0.80),
+    (24, 0.35),
+    (40, 0.15),
+)
+
 
 def build_action_mask(game):
     mask = np.zeros(len(ACTION_LOOKUP), dtype=np.float32)
@@ -24,11 +31,52 @@ def build_one_hot_policy(move):
     return pi
 
 
-def choose_self_play_move(pi, sample_steps, step_idx):
-    if step_idx < sample_steps:
-        move_idx = np.random.choice(len(pi), p=pi)
-    else:
-        move_idx = int(np.argmax(pi))
+def parse_temperature_schedule(text):
+    if not text:
+        return list(DEFAULT_TEMPERATURE_SCHEDULE)
+
+    schedule = []
+    for item in text.split(","):
+        start_text, temp_text = item.split(":")
+        schedule.append((int(start_text.strip()), float(temp_text.strip())))
+    schedule.sort(key=lambda item: item[0])
+    return schedule
+
+
+def get_temperature_for_step(step_idx, temperature_schedule):
+    schedule = temperature_schedule or DEFAULT_TEMPERATURE_SCHEDULE
+    temperature = schedule[0][1]
+    for start_step, scheduled_temp in schedule:
+        if step_idx >= start_step:
+            temperature = scheduled_temp
+        else:
+            break
+    return temperature
+
+
+def temper_policy(pi, temperature):
+    temperature = max(float(temperature), 1e-6)
+    if temperature <= 1e-3:
+        sharpened = np.zeros_like(pi)
+        sharpened[int(np.argmax(pi))] = 1.0
+        return sharpened
+
+    adjusted = np.array(pi, copy=True, dtype=np.float64)
+    positive = adjusted > 0
+    adjusted[positive] = np.power(adjusted[positive], 1.0 / temperature)
+    total = adjusted.sum()
+    if total <= 0:
+        fallback = np.zeros_like(pi)
+        fallback[int(np.argmax(pi))] = 1.0
+        return fallback
+    adjusted /= total
+    return adjusted.astype(np.float32)
+
+
+def choose_self_play_move(pi, step_idx, temperature_schedule=None):
+    temperature = get_temperature_for_step(step_idx, temperature_schedule)
+    tempered_pi = temper_policy(pi, temperature)
+    move_idx = np.random.choice(len(tempered_pi), p=tempered_pi)
     return ACTION_LOOKUP[move_idx]
 
 
@@ -43,7 +91,7 @@ def finalize_episode(episode, winner):
     return labeled_episode
 
 
-def collect_data(agent, games=100, sample_steps=8, by_episode=True):
+def collect_data(agent, games=100, by_episode=True, temperature_schedule=None):
     data = []
 
     for _ in tqdm(range(games), desc="Collecting self-play data"):
@@ -59,7 +107,11 @@ def collect_data(agent, games=100, sample_steps=8, by_episode=True):
                 obs = game.state_to_vector_np(state)
 
                 _, pi, mask = agent.decide_with_info(game)
-                move = choose_self_play_move(pi, sample_steps=sample_steps, step_idx=step_idx)
+                move = choose_self_play_move(
+                    pi,
+                    step_idx=step_idx,
+                    temperature_schedule=temperature_schedule,
+                )
 
                 episode.append((
                     np.array(obs, copy=True),
@@ -145,9 +197,17 @@ if __name__ == "__main__":
     parser.add_argument("--puct-c", type=float, default=1.0)
     parser.add_argument("--prior-temperature", type=float, default=1.5)
     parser.add_argument("--model", type=str, default=None)
-    parser.add_argument("--sample-steps", type=int, default=8)
+    parser.add_argument(
+        "--temperature-schedule",
+        type=str,
+        default="0:1.25,12:0.8,24:0.35,40:0.15",
+        help="Comma-separated step:temperature pairs, e.g. 0:1.25,12:0.8,24:0.35",
+    )
+    parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
+    parser.add_argument("--root-exploration-fraction", type=float, default=0.25)
     parser.add_argument("--flat", action="store_true")
     args = parser.parse_args()
+    temperature_schedule = parse_temperature_schedule(args.temperature_schedule)
 
     if args.mode == "greedy":
         dataset = collect_greedy_data(games=args.games, by_episode=not args.flat)
@@ -168,12 +228,14 @@ if __name__ == "__main__":
             action_dim=180,
             puct_c=args.puct_c,
             prior_temperature=args.prior_temperature,
+            root_dirichlet_alpha=args.dirichlet_alpha,
+            root_exploration_fraction=args.root_exploration_fraction,
         )
         dataset = collect_data(
             agent,
             games=args.games,
-            sample_steps=args.sample_steps,
             by_episode=not args.flat,
+            temperature_schedule=temperature_schedule,
         )
         output_path = args.output or "MCTS_nn_dataset_pi_t15_c10.pkl"
 

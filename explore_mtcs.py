@@ -43,6 +43,20 @@ def randomize_hidden_bag_for_search(game):
     return search_game
 
 
+def add_dirichlet_noise(priors, alpha, exploration_fraction):
+    if alpha <= 0 or exploration_fraction <= 0 or not priors:
+        return priors
+
+    actions = list(priors.keys())
+    noise = np.random.dirichlet([alpha] * len(actions))
+    keep_fraction = 1.0 - exploration_fraction
+
+    mixed_priors = {}
+    for action, noise_value in zip(actions, noise):
+        mixed_priors[action] = keep_fraction * priors[action] + exploration_fraction * float(noise_value)
+    return mixed_priors
+
+
 class MCTSNode:
     def __init__(self, game=None, parent=None, action=None, prior=0.0):
         self.children = []  # 存储子节点对象
@@ -120,6 +134,8 @@ class MCTSAgent:
         use_value=True,
         puct_c=1.4,
         prior_temperature=1.0,
+        root_dirichlet_alpha=0.0,
+        root_exploration_fraction=0.0,
         debug_log_path=None,
         debug_top_k=8,
         debug_label=None,
@@ -137,6 +153,8 @@ class MCTSAgent:
         self.use_value = use_value
         self.puct_c = puct_c
         self.prior_temperature = prior_temperature
+        self.root_dirichlet_alpha = root_dirichlet_alpha
+        self.root_exploration_fraction = root_exploration_fraction
         self.debug_log_path = Path(debug_log_path) if debug_log_path else None
         self.debug_top_k = debug_top_k
         self.debug_label = debug_label or "mcts"
@@ -179,15 +197,24 @@ class MCTSAgent:
 
         return policy_vector, value
 
-    def _get_priors(self, policy_logits, legal_moves):
+    def _get_priors(self, policy_logits, legal_moves, add_root_noise=False):
         if self.use_policy:
-            return compute_softmax_over_legal(
+            priors = compute_softmax_over_legal(
                 policy_logits,
                 legal_moves,
                 temperature=self.prior_temperature,
             )
-        uniform_prior = 1.0 / len(legal_moves)
-        return {action: uniform_prior for action in legal_moves}
+        else:
+            uniform_prior = 1.0 / len(legal_moves)
+            priors = {action: uniform_prior for action in legal_moves}
+
+        if add_root_noise:
+            priors = add_dirichlet_noise(
+                priors,
+                alpha=self.root_dirichlet_alpha,
+                exploration_fraction=self.root_exploration_fraction,
+            )
+        return priors
 
     def _build_mask(self, game):
         legal = game.get_legal_moves()
@@ -200,7 +227,7 @@ class MCTSAgent:
     def _expand_root(self, root):
         policy_logits, _ = self._evaluate(root.game)
         legal_moves = root.game.get_legal_moves()
-        priors = self._get_priors(policy_logits, legal_moves)
+        priors = self._get_priors(policy_logits, legal_moves, add_root_noise=True)
         for action, p in priors.items():
             root.add_child(action, prior=p)
 
@@ -300,7 +327,7 @@ class MCTSAgent:
         # 先对 root 做一次 evaluate + expand
         policy_logits, _ = self._evaluate(root.game)
         legal_moves = root.game.get_legal_moves()
-        priors = self._get_priors(policy_logits, legal_moves)
+        priors = self._get_priors(policy_logits, legal_moves, add_root_noise=True)
         for action, p in priors.items():
             root.add_child(action, prior=p)
 

@@ -213,6 +213,44 @@ def sweep_arena(
     return summaries
 
 
+def promotion_match(
+    candidate_path,
+    champion_path,
+    required_win_rate=0.55,
+    games_per_side=20,
+    n_simulations=100,
+    n_determinizations=4,
+    puct_c=1.0,
+    prior_temperature=1.0,
+    device=None,
+):
+    summary = arena_match(
+        model_a_path=candidate_path,
+        model_b_path=champion_path,
+        games_per_side=games_per_side,
+        n_simulations=n_simulations,
+        n_determinizations=n_determinizations,
+        puct_c=puct_c,
+        prior_temperature=prior_temperature,
+        device=device,
+        debug_dir=None,
+    )
+    promoted = summary["model_a_win_rate"] >= required_win_rate
+    summary["required_win_rate"] = required_win_rate
+    summary["promoted"] = promoted
+    print(
+        "Promotion Result:",
+        {
+            "candidate": Path(candidate_path).name,
+            "champion": Path(champion_path).name,
+            "candidate_win_rate": summary["model_a_win_rate"],
+            "required_win_rate": required_win_rate,
+            "promoted": promoted,
+        },
+    )
+    return summary
+
+
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     arena_match(
@@ -241,4 +279,3 @@ if __name__ == "__main__":
 #             {"n_simulations": 200, "n_determinizations": 8, "puct_c": 1.0, "prior_temperature": 1.5},
 #         ],
 #     )
-
