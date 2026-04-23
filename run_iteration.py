@@ -1,6 +1,9 @@
 import argparse
 import pickle
+import random
+import re
 import shutil
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -8,8 +11,11 @@ import torch
 
 from battle import promotion_match
 from explore_mtcs import AzulNet, MCTSAgent
-from get_dataset import collect_data, parse_temperature_schedule
+from get_dataset import collect_data, collect_data_from_matchups, parse_temperature_schedule
 from train_mcts_nn import train
+
+
+ITERATION_TAG_RE = re.compile(r"(\d{8}_\d{6})")
 
 
 def load_net(model_path, device):
@@ -22,10 +28,8 @@ def load_net(model_path, device):
     return net
 
 
-def collect_self_play(
-    champion_path,
-    output_path,
-    games,
+def build_selfplay_agent(
+    model_path,
     device,
     n_simulations,
     n_determinizations,
@@ -33,10 +37,9 @@ def collect_self_play(
     prior_temperature,
     dirichlet_alpha,
     root_exploration_fraction,
-    temperature_schedule,
 ):
-    net = load_net(champion_path, device)
-    agent = MCTSAgent(
+    net = load_net(model_path, device)
+    return MCTSAgent(
         n_simulations=n_simulations,
         n_determinizations=n_determinizations,
         my_player_idx=0,
@@ -48,12 +51,94 @@ def collect_self_play(
         root_dirichlet_alpha=dirichlet_alpha,
         root_exploration_fraction=root_exploration_fraction,
     )
-    dataset = collect_data(
-        agent,
-        games=games,
-        by_episode=True,
-        temperature_schedule=temperature_schedule,
+
+
+def collect_self_play(
+    champion_path,
+    archive_dir,
+    output_path,
+    games,
+    device,
+    n_simulations,
+    n_determinizations,
+    puct_c,
+    prior_temperature,
+    dirichlet_alpha,
+    root_exploration_fraction,
+    temperature_schedule,
+    selfplay_opponent_pool_size,
+    seed,
+):
+    champion_path = Path(champion_path)
+    archive_dir = Path(archive_dir)
+    archive_paths = []
+    if selfplay_opponent_pool_size > 0 and archive_dir.exists():
+        archive_paths = sort_paths_by_iteration_tag(archive_dir.glob("*.pt"))
+        archive_paths = archive_paths[-selfplay_opponent_pool_size:]
+
+    opponent_pool = [champion_path, *archive_paths]
+    print("Self-play opponent pool:")
+    for pool_path in opponent_pool:
+        print(f" - {pool_path}")
+
+    agent_cache = {}
+
+    def get_agent(model_path):
+        model_path = str(Path(model_path))
+        if model_path not in agent_cache:
+            agent_cache[model_path] = build_selfplay_agent(
+                model_path=model_path,
+                device=device,
+                n_simulations=n_simulations,
+                n_determinizations=n_determinizations,
+                puct_c=puct_c,
+                prior_temperature=prior_temperature,
+                dirichlet_alpha=dirichlet_alpha,
+                root_exploration_fraction=root_exploration_fraction,
+            )
+        return agent_cache[model_path]
+
+    champion_agent = get_agent(champion_path)
+    rng = random.Random(seed)
+    seat_counts = Counter()
+    opponent_counts = Counter()
+    matchups = []
+    for _ in range(games):
+        opponent_path = Path(rng.choice(opponent_pool))
+        champion_seat = rng.randint(0, 1)
+        opponent_seat = 1 - champion_seat
+        seat_counts[champion_seat] += 1
+        opponent_counts[opponent_path.name] += 1
+        matchups.append({
+            champion_seat: champion_agent,
+            opponent_seat: get_agent(opponent_path),
+        })
+
+    print("Self-play opponent sample counts:")
+    for opponent_name, count in sorted(opponent_counts.items()):
+        print(f" - {opponent_name}: {count}")
+    print(
+        "Champion seat counts:",
+        {
+            "seat_0": seat_counts.get(0, 0),
+            "seat_1": seat_counts.get(1, 0),
+        },
     )
+
+    if archive_paths:
+        dataset = collect_data_from_matchups(
+            matchups,
+            by_episode=True,
+            temperature_schedule=temperature_schedule,
+        )
+    else:
+        dataset = collect_data(
+            champion_agent,
+            games=games,
+            by_episode=True,
+            temperature_schedule=temperature_schedule,
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as f:
         pickle.dump(dataset, f)
@@ -64,11 +149,18 @@ def collect_self_play(
     return output_path
 
 
+def sort_paths_by_iteration_tag(paths):
+    def sort_key(path):
+        match = ITERATION_TAG_RE.search(path.stem)
+        if match:
+            return (1, match.group(1), path.name)
+        return (0, path.name, path.name)
+
+    return sorted(paths, key=sort_key)
+
+
 def select_replay_files(replay_dir, replay_window):
-    replay_files = sorted(
-        replay_dir.glob("selfplay_*.pkl"),
-        key=lambda path: path.stat().st_mtime,
-    )
+    replay_files = sort_paths_by_iteration_tag(replay_dir.glob("selfplay_*.pkl"))
     if replay_window is not None and replay_window > 0:
         replay_files = replay_files[-replay_window:]
     return replay_files
@@ -97,6 +189,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--value-loss-weight", type=float, default=1.0)
+    parser.add_argument("--loser-policy-weight", type=float, default=1.0)
     parser.add_argument("--train-ratio", type=float, default=0.9)
     parser.add_argument("--arena-games-per-side", type=int, default=20)
     parser.add_argument("--arena-sims", type=int, default=100)
@@ -106,6 +200,7 @@ def main():
     parser.add_argument("--prior-temperature", type=float, default=1.0)
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--root-exploration-fraction", type=float, default=0.25)
+    parser.add_argument("--selfplay-opponent-pool-size", type=int, default=4)
     parser.add_argument(
         "--temperature-schedule",
         type=str,
@@ -134,6 +229,7 @@ def main():
 
     collect_self_play(
         champion_path=champion_path,
+        archive_dir=archive_dir,
         output_path=replay_path,
         games=args.games,
         device=device,
@@ -144,6 +240,8 @@ def main():
         dirichlet_alpha=args.dirichlet_alpha,
         root_exploration_fraction=args.root_exploration_fraction,
         temperature_schedule=temperature_schedule,
+        selfplay_opponent_pool_size=args.selfplay_opponent_pool_size,
+        seed=args.seed,
     )
 
     replay_files = select_replay_files(replay_dir, args.replay_window)
@@ -163,6 +261,8 @@ def main():
         seed=args.seed,
         resume_path=str(champion_path),
         resume_weights_only=True,
+        value_loss_weight=args.value_loss_weight,
+        loser_policy_weight=args.loser_policy_weight,
         strict_episode_split=True,
     )
 
