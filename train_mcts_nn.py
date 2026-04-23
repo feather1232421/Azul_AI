@@ -32,7 +32,7 @@ def load_raw_data(data_path=None, data_paths=None):
 
 
 @torch.no_grad()
-def evaluate(model, loader, device, value_loss_weight=1.0, loser_policy_weight=0.3):
+def evaluate(model, loader, device, value_loss_weight=1.0, loser_policy_weight=1.0):
     model.eval()
 
     total_loss = 0.0
@@ -130,8 +130,8 @@ def train(
     seed=42,
     resume_path=None,
     resume_weights_only=False,
-    value_loss_weight=0.2,
-    loser_policy_weight=0.3,
+    value_loss_weight=1.0,
+    loser_policy_weight=1.0,
     strict_episode_split=False,
 ):
     random.seed(seed)
@@ -159,6 +159,13 @@ def train(
     for path in loaded_paths:
         print(f" - {path}")
     print(f"Loaded top-level entries: {len(raw_data)}")
+    print(
+        "Loss weights:",
+        {
+            "value_loss_weight": value_loss_weight,
+            "loser_policy_weight": loser_policy_weight,
+        },
+    )
     if split_mode == "episode":
         print(f"Episode split: train={train_episodes}, val={val_episodes}")
     elif split_mode == "flat":

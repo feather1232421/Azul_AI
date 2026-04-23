@@ -91,51 +91,71 @@ def finalize_episode(episode, winner):
     return labeled_episode
 
 
-def collect_data(agent, games=100, by_episode=True, temperature_schedule=None):
+def play_episode(agents_by_player, temperature_schedule=None):
+    game = AzulGame()
+    game.reset()
+    episode = []
+    step_idx = 0
+
+    while not game.is_game_over():
+        while not game.is_round_over():
+            curr_idx = game.current_player_idx
+            if curr_idx not in agents_by_player:
+                raise KeyError(f"Missing agent for player {curr_idx}")
+
+            state = game.get_observation_for_player(curr_idx)
+            obs = game.state_to_vector_np(state)
+
+            agent = agents_by_player[curr_idx]
+            _, pi, mask = agent.decide_with_info(game)
+            move = choose_self_play_move(
+                pi,
+                step_idx=step_idx,
+                temperature_schedule=temperature_schedule,
+            )
+
+            episode.append((
+                np.array(obs, copy=True),
+                np.array(pi, copy=True),
+                curr_idx,
+                np.array(mask, copy=True),
+            ))
+            game.play_turn(*move)
+            step_idx += 1
+
+    if game.players[0].score > game.players[1].score:
+        winner = 0
+    elif game.players[1].score > game.players[0].score:
+        winner = 1
+    else:
+        winner = 2
+
+    return finalize_episode(episode, winner)
+
+
+def collect_data_from_matchups(matchups, by_episode=True, temperature_schedule=None):
     data = []
 
-    for _ in tqdm(range(games), desc="Collecting self-play data"):
-        game = AzulGame()
-        game.reset()
-        episode = []
-        step_idx = 0
-
-        while not game.is_game_over():
-            while not game.is_round_over():
-                curr_idx = game.current_player_idx
-                state = game.get_observation_for_player(curr_idx)
-                obs = game.state_to_vector_np(state)
-
-                _, pi, mask = agent.decide_with_info(game)
-                move = choose_self_play_move(
-                    pi,
-                    step_idx=step_idx,
-                    temperature_schedule=temperature_schedule,
-                )
-
-                episode.append((
-                    np.array(obs, copy=True),
-                    np.array(pi, copy=True),
-                    curr_idx,
-                    np.array(mask, copy=True),
-                ))
-                game.play_turn(*move)
-                step_idx += 1
-
-        if game.players[0].score > game.players[1].score:
-            winner = 0
-        elif game.players[1].score > game.players[0].score:
-            winner = 1
-        else:
-            winner = 2
-
-        labeled_episode = finalize_episode(episode, winner)
+    for agents_by_player in tqdm(matchups, desc="Collecting self-play data"):
+        labeled_episode = play_episode(
+            agents_by_player,
+            temperature_schedule=temperature_schedule,
+        )
         if by_episode:
             data.append(labeled_episode)
         else:
             data.extend(labeled_episode)
 
     return data
+
+
+def collect_data(agent, games=100, by_episode=True, temperature_schedule=None):
+    matchups = [{0: agent, 1: agent} for _ in range(games)]
+    return collect_data_from_matchups(
+        matchups,
+        by_episode=by_episode,
+        temperature_schedule=temperature_schedule,
+    )
 
 
 def collect_greedy_data(games=100, agent=None, by_episode=True):
