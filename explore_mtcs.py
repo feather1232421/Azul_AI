@@ -12,6 +12,7 @@ from pathlib import Path
 from config import *
 import numpy as np
 from azul_net import AzulNet
+from azul_transformer import AzulTransformer
 
 
 def compute_softmax_over_legal(policy_logits, legal_moves, temperature=1.0):
@@ -145,7 +146,9 @@ class MCTSAgent:
         # 当前二人零和版本中，my_player_idx 不再参与 value 语义
         self.my_player_idx = my_player_idx
         self.device = device if device is not None else torch.device("cpu")
-        self.net = net if net is not None else AzulNet()
+
+        # self.net = net if net is not None else AzulNet()
+        self.net = net if net is not None else AzulTransformer()
         self.net.to(self.device)
         self.net.eval()
         self.action_dim = action_dim
@@ -184,15 +187,37 @@ class MCTSAgent:
             value = torch.tanh(value_logit)
         return value.item()
 
-    def _evaluate(self, game):
-        obs = self._get_value_obs_tensor(game)
-        with torch.no_grad():
-            policy_logits, value_logit = self.net(obs)
-            # value_logit 是一个标量，可以用 item()
-            value = torch.tanh(value_logit).item() if self.use_value else 0.0
+    # def _evaluate(self, game):
+    #     obs = self._get_value_obs_tensor(game)
+    #     with torch.no_grad():
+    #         policy_logits, value_logit = self.net(obs)
+    #         # value_logit 是一个标量，可以用 item()
+    #         value = torch.tanh(value_logit).item() if self.use_value else 0.0
+    #
+    #         # policy_logits 需要去掉 batch 维度，转回 CPU 上的 numpy 或 list
+    #         # 这样你在 compute_softmax_over_legal 里访问比较快
+    #         policy_vector = policy_logits.squeeze(0).cpu().numpy()
+    #
+    #     return policy_vector, value
 
-            # policy_logits 需要去掉 batch 维度，转回 CPU 上的 numpy 或 list
-            # 这样你在 compute_softmax_over_legal 里访问比较快
+    # transformer 版本统一接口
+    def _get_obs_tensor(self, game):
+        state = game.get_observation_current()
+        # 依然调用你之前的 state_to_vector_np，它返回的是 567 维向量
+        obs = game.state_to_vector_np(state)
+
+        # 转为 tensor。注意：Transformer 在 forward 里会自己 view 成 [B, N, D]
+        # 所以这里只需要确保它是 [1, 567] 即可
+        return torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+    # 然后统一 evaluate 函数
+    def _evaluate(self, game):
+        obs = self._get_obs_tensor(game)  # 统一调用
+        with torch.no_grad():
+            # 调用新的 AzulTransformer
+            policy_logits, value_logit = self.net(obs)
+
+            value = torch.tanh(value_logit).item() if self.use_value else 0.0
             policy_vector = policy_logits.squeeze(0).cpu().numpy()
 
         return policy_vector, value
