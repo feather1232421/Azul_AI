@@ -7,8 +7,9 @@ from tqdm import tqdm
 
 from ai import GreedyAgent
 from config import ACTION_LOOKUP, REVERSE_LOOKUP
-from explore_mtcs import AzulNet, MCTSAgent
+from explore_mtcs import MCTSAgent
 from logic import AzulGame
+from model_utils import build_model, load_model
 
 DEFAULT_TEMPERATURE_SCHEDULE = (
     (0, 1.25),
@@ -217,6 +218,7 @@ if __name__ == "__main__":
     parser.add_argument("--puct-c", type=float, default=1.0)
     parser.add_argument("--prior-temperature", type=float, default=1.5)
     parser.add_argument("--model", type=str, default=None)
+    parser.add_argument("--model-type", choices=["mlp", "transformer"], default="transformer")
     parser.add_argument(
         "--temperature-schedule",
         type=str,
@@ -234,11 +236,15 @@ if __name__ == "__main__":
         output_path = args.output or "greedy_teacher_dataset.pkl"
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        net = AzulNet(obs_dim=567, action_dim=180)
+        net = build_model(model_type=args.model_type, obs_dim=567, action_dim=180)
         if args.model is not None:
-            ckpt = torch.load(args.model, map_location=device)
-            state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-            net.load_state_dict(state_dict)
+            net, _, loaded_type = load_model(
+                args.model,
+                device=device,
+                obs_dim=567,
+                action_dim=180,
+            )
+            print(f"Loaded model checkpoint as {loaded_type}")
         agent = MCTSAgent(
             n_simulations=args.sims,
             n_determinizations=args.worlds,

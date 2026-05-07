@@ -1,10 +1,12 @@
+import argparse
 import time
 from pathlib import Path
 
 import torch
 
 from logic import AzulGame
-from explore_mtcs import MCTSAgent, AzulNet
+from explore_mtcs import MCTSAgent
+from model_utils import load_model
 
 
 def play_one_game(agent_0, agent_1):
@@ -67,12 +69,13 @@ def build_mcts_agent(
     debug_log_path=None,
     debug_label=None,
 ):
-    net = AzulNet(obs_dim=567, action_dim=180)
-    ckpt = torch.load(model_path, map_location=device)
-    state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-    net.load_state_dict(state_dict)
-    net.to(device)
-    net.eval()
+    net, _, resolved_model_type = load_model(
+        model_path,
+        device=device,
+        obs_dim=567,
+        action_dim=180,
+    )
+    print(f"Loaded {Path(model_path).name} as {resolved_model_type}")
     return MCTSAgent(
         n_simulations=n_simulations,
         n_determinizations=n_determinizations,
@@ -252,18 +255,44 @@ def promotion_match(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["arena", "promotion"], default="arena")
+    parser.add_argument("--model-a", type=str, required=True)
+    parser.add_argument("--model-b", type=str, required=True)
+    parser.add_argument("--games-per-side", type=int, default=10)
+    parser.add_argument("--n-simulations", type=int, default=200)
+    parser.add_argument("--n-determinizations", type=int, default=4)
+    parser.add_argument("--puct-c", type=float, default=1.4)
+    parser.add_argument("--prior-temperature", type=float, default=1.0)
+    parser.add_argument("--required-win-rate", type=float, default=0.55)
+    parser.add_argument("--debug-dir", type=str, default=None)
+    args = parser.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    arena_match(
-        model_a_path="azul_net_v4.pt",
-        model_b_path="azul_net_v6_last.pt",
-        games_per_side=5,
-        n_simulations=200,
-        n_determinizations=4,
-        puct_c=1.0,
-        prior_temperature=1.5,
-        device=device,
-        debug_dir="debug_logs",
-    )
+    if args.mode == "arena":
+        arena_match(
+            model_a_path=args.model_a,
+            model_b_path=args.model_b,
+            games_per_side=args.games_per_side,
+            n_simulations=args.n_simulations,
+            n_determinizations=args.n_determinizations,
+            puct_c=args.puct_c,
+            prior_temperature=args.prior_temperature,
+            device=device,
+            debug_dir=args.debug_dir,
+        )
+    else:
+        promotion_match(
+            candidate_path=args.model_a,
+            champion_path=args.model_b,
+            required_win_rate=args.required_win_rate,
+            games_per_side=args.games_per_side,
+            n_simulations=args.n_simulations,
+            n_determinizations=args.n_determinizations,
+            puct_c=args.puct_c,
+            prior_temperature=args.prior_temperature,
+            device=device,
+        )
 
 
 # if __name__ == "__main__":

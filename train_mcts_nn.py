@@ -1,3 +1,4 @@
+import argparse
 import pickle
 import random
 from pathlib import Path
@@ -8,8 +9,14 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from azul_net import AzulNet
 from dataset import AzulMCTSDataset
+from model_utils import (
+    build_checkpoint_payload,
+    build_model,
+    infer_model_type_from_checkpoint,
+    load_checkpoint,
+    unwrap_checkpoint_state_dict,
+)
 
 
 def load_raw_data(data_path=None, data_paths=None):
@@ -133,6 +140,7 @@ def train(
     value_loss_weight=1.0,
     loser_policy_weight=1.0,
     strict_episode_split=False,
+    model_type="transformer",
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -191,7 +199,7 @@ def train(
         num_workers=0,
     )
 
-    model = AzulNet(obs_dim=567, action_dim=180).to(device)
+    model = build_model(model_type=model_type, obs_dim=567, action_dim=180).to(device)
     save_path = Path(save_path)
     last_save_path = save_path.with_name(f"{save_path.stem}_last{save_path.suffix}")
 
@@ -202,15 +210,29 @@ def train(
     )
 
     if resume_path is not None:
-        ckpt = torch.load(resume_path, map_location=device)
+        ckpt = load_checkpoint(resume_path, device)
+        resume_model_type = infer_model_type_from_checkpoint(ckpt)
 
         if resume_weights_only:
-            state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-            model.load_state_dict(state_dict)
-            start_epoch = 1
-            best_val_loss = float("inf")
-            print("Loaded resume weights only.")
+            if resume_model_type != model_type:
+                start_epoch = 1
+                best_val_loss = float("inf")
+                print(
+                    f"Resume skipped: checkpoint model_type={resume_model_type} "
+                    f"but current model_type={model_type}."
+                )
+            else:
+                state_dict = unwrap_checkpoint_state_dict(ckpt)
+                model.load_state_dict(state_dict)
+                start_epoch = 1
+                best_val_loss = float("inf")
+                print("Loaded resume weights only.")
         elif isinstance(ckpt, dict) and "model" in ckpt:
+            if resume_model_type != model_type:
+                raise ValueError(
+                    f"Resume checkpoint model_type={resume_model_type} does not match "
+                    f"current model_type={model_type}."
+                )
             model.load_state_dict(ckpt["model"])
             if "optimizer" in ckpt:
                 optimizer.load_state_dict(ckpt["optimizer"])
@@ -218,6 +240,11 @@ def train(
             best_val_loss = ckpt.get("best_val_loss", float("inf"))
             print(f"Resume from epoch {start_epoch}")
         else:
+            if resume_model_type != model_type:
+                raise ValueError(
+                    f"Resume checkpoint model_type={resume_model_type} does not match "
+                    f"current model_type={model_type}."
+                )
             model.load_state_dict(ckpt)
             start_epoch = 1
             best_val_loss = float("inf")
@@ -294,38 +321,29 @@ def train(
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "epoch": epoch,
-                    "best_val_loss": best_val_loss,
-                },
-                save_path,
-            )
+            torch.save(build_checkpoint_payload(
+                model,
+                optimizer=optimizer,
+                epoch=epoch,
+                extra={"best_val_loss": best_val_loss},
+            ), save_path)
             print(f" -> Saved best model to {save_path}")
 
         if epoch % 15 == 0:
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "epoch": epoch,
-                    "val_loss": val_loss,
-                },
-                last_save_path,
-            )
+            torch.save(build_checkpoint_payload(
+                model,
+                optimizer=optimizer,
+                epoch=epoch,
+                extra={"val_loss": val_loss},
+            ), last_save_path)
             print(f" -> Saved epoch {epoch} model to {last_save_path}")
 
-    torch.save(
-        {
-            "model": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "epoch": start_epoch + epochs - 1,
-            "best_val_loss": best_val_loss,
-        },
-        last_save_path,
-    )
+    torch.save(build_checkpoint_payload(
+        model,
+        optimizer=optimizer,
+        epoch=start_epoch + epochs - 1,
+        extra={"best_val_loss": best_val_loss},
+    ), last_save_path)
 
     print("Training finished.")
     print("Best val loss:", best_val_loss)
@@ -341,14 +359,41 @@ def train(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-path", type=str, default=None)
+    parser.add_argument("--data-paths", type=str, nargs="*", default=None)
+    parser.add_argument("--save-path", type=str, default="azul_net_best.pt")
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--lr", type=float, default=2e-4)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--epochs", type=int, default=15)
+    parser.add_argument("--train-ratio", type=float, default=0.9)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--resume-path", type=str, default=None)
+    parser.add_argument("--resume-weights-only", action="store_true")
+    parser.add_argument("--value-loss-weight", type=float, default=1.0)
+    parser.add_argument("--loser-policy-weight", type=float, default=1.0)
+    parser.add_argument("--strict-episode-split", action="store_true")
+    parser.add_argument("--model-type", choices=["mlp", "transformer"], default="transformer")
+    args = parser.parse_args()
+
+    if args.data_path is None and not args.data_paths:
+        parser.error("Provide --data-path or --data-paths.")
+
     train(
-        data_path="mcts_dataset_pi_t15_c10_v4_1k.pkl",
-        save_path="azul_net_v6.pt",
-        resume_path="azul_net_v4.pt",
-        batch_size=256,
-        lr=2e-4,
-        weight_decay=1e-4,
-        epochs=15,
-        train_ratio=0.9,
-        seed=42,
+        data_path=args.data_path,
+        data_paths=args.data_paths,
+        save_path=args.save_path,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        epochs=args.epochs,
+        train_ratio=args.train_ratio,
+        seed=args.seed,
+        resume_path=args.resume_path,
+        resume_weights_only=args.resume_weights_only,
+        value_loss_weight=args.value_loss_weight,
+        loser_policy_weight=args.loser_policy_weight,
+        strict_episode_split=args.strict_episode_split,
+        model_type=args.model_type,
     )

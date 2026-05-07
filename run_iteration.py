@@ -10,8 +10,9 @@ from pathlib import Path
 import torch
 
 from battle import promotion_match
-from explore_mtcs import AzulNet, MCTSAgent
+from explore_mtcs import MCTSAgent
 from get_dataset import collect_data, collect_data_from_matchups, parse_temperature_schedule
+from model_utils import load_model
 from train_mcts_nn import train
 
 
@@ -19,12 +20,7 @@ ITERATION_TAG_RE = re.compile(r"(\d{8}_\d{6})")
 
 
 def load_net(model_path, device):
-    net = AzulNet(obs_dim=567, action_dim=180)
-    ckpt = torch.load(model_path, map_location=device)
-    state_dict = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
-    net.load_state_dict(state_dict)
-    net.to(device)
-    net.eval()
+    net, _, _ = load_model(model_path, device=device, obs_dim=567, action_dim=180)
     return net
 
 
@@ -207,6 +203,7 @@ def main():
         default="0:1.25,12:0.8,24:0.35,40:0.15",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--model-type", choices=["mlp", "transformer"], default="transformer")
     parser.add_argument("--allow-promote", action="store_true")
     parser.add_argument("--no-promote", action="store_true")
     args = parser.parse_args()
@@ -264,6 +261,7 @@ def main():
         value_loss_weight=args.value_loss_weight,
         loser_policy_weight=args.loser_policy_weight,
         strict_episode_split=True,
+        model_type=args.model_type,
     )
 
     promotion_summary = promotion_match(
