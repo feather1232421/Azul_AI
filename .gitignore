@@ -17,3 +17,6 @@ models/transformer_candidate_*_last.pt
 # Archived legacy artifacts
 artifacts/
 replays_archive/
+
+# model
+models/*.pt
