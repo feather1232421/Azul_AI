@@ -112,3 +112,15 @@ Useful overrides:
 ```bash
 python run_iteration.py --games 300 --selfplay-sims 100 --train-epochs 6 --arena-games-per-side 10
 ```
+
+Replay persistence:
+
+- Each `run_iteration.py` call saves self-play training data locally as `replays/selfplay_<timestamp>.pkl`.
+- The loop then trains from the most recent replay files selected by `--replay-window`.
+- A lightweight manifest is appended to `replays/manifest.jsonl` so you can audit what each loop iteration generated.
+
+Code status:
+
+- Active transformer path stays at repo root: `run_iteration.py`, `loop_train.py`, `get_dataset.py`, `train_mcts_nn.py`, `battle.py`, `server.py`.
+- Deprecated PPO/BC experiments now live under `legacy/ppo_bc/`.
+- Old root commands such as `train.py`, `train_bc.py`, `bc_to_ppo.py`, and `enjoy.py` are temporary compatibility wrappers and should not receive new work.

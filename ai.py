@@ -1,6 +1,7 @@
 import random
 import torch
 import numpy as np
+import warnings
 from config import *  # 导入你之前定义的颜色常量
 
 
@@ -106,6 +107,11 @@ class GreedyAgent:
 
 class PPOAgent:
     def __init__(self, path):
+        warnings.warn(
+            "PPOAgent is deprecated and kept only for the legacy PPO/BC pipeline.",
+            FutureWarning,
+            stacklevel=2,
+        )
         try:
             from sb3_contrib import MaskablePPO
         except ImportError as exc:
@@ -146,7 +152,12 @@ class PPOAgent:
 
 class BCAgent:
     def __init__(self, path, target_player_idx=0, device=None):
-        from abandon_teach import BCPolicy
+        warnings.warn(
+            "BCAgent is deprecated and kept only for the legacy PPO/BC pipeline.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        from legacy.ppo_bc.abandon_teach import BCPolicy
 
         self.target_player_idx = target_player_idx
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")

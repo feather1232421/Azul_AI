@@ -1,6 +1,6 @@
 import pickle
 
-with open("MCTS_nn_dataset_pi.pkl", "rb") as f:
+with open("artifacts/legacy_mcts_datasets/MCTS_nn_dataset_pi.pkl", "rb") as f:
     dataset = pickle.load(f)
 
 obs, pi, z, mask = dataset[10]

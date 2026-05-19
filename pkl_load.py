@@ -1,7 +1,7 @@
 import pickle
 import numpy as np
 
-with open("greedy_scoring_dataset.pkl", "rb") as f:
+with open("artifacts/legacy_teacher_data/greedy_scoring_dataset.pkl", "rb") as f:
     dataset = pickle.load(f)
 
 scores = [score for _, _, score in dataset]

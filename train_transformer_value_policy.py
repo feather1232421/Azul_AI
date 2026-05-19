@@ -5,8 +5,8 @@ from train_mcts_nn import train
 
 
 DEFAULT_DATA_PATHS = [
-    "greedy_teacher_dataset.pkl",
-    "mcts_dataset_pi_t15_c10_v4_1k.pkl",
+    "artifacts/legacy_teacher_data/greedy_teacher_dataset.pkl",
+    "artifacts/legacy_mcts_datasets/mcts_dataset_pi_t15_c10_v4_1k.pkl",
 ]
 DEFAULT_RESUME_PATH = "models/transformer_warmstart_d64.pt"
 DEFAULT_SAVE_PATH = "models/transformer_policy_value_mix.pt"

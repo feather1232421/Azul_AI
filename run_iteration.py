@@ -1,4 +1,5 @@
 import argparse
+import json
 import pickle
 import random
 import re
@@ -142,7 +143,13 @@ def collect_self_play(
     sample_count = sum(len(episode) for episode in dataset)
     print(f"Saved self-play replay to {output_path}")
     print(f"Collected episodes={len(dataset)}, samples={sample_count}")
-    return output_path
+    return {
+        "output_path": output_path,
+        "episodes": len(dataset),
+        "samples": sample_count,
+        "opponent_pool": [str(path) for path in opponent_pool],
+        "temperature_schedule": temperature_schedule,
+    }
 
 
 def sort_paths_by_iteration_tag(paths):
@@ -171,10 +178,18 @@ def archive_and_promote(champion_path, candidate_path, archive_dir, iteration_ta
     return archived_path
 
 
+def append_replay_manifest(manifest_path, record):
+    manifest_path = Path(manifest_path)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    with manifest_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--champion", type=str, default="models/transformer_champion.pt")
     parser.add_argument("--replay-dir", type=str, default="replays")
+    parser.add_argument("--replay-manifest", type=str, default=None)
     parser.add_argument("--archive-dir", type=str, default="champion_archive/transformer")
     parser.add_argument("--candidate-dir", type=str, default="models")
     parser.add_argument("--games", type=int, default=200)
@@ -210,6 +225,7 @@ def main():
 
     champion_path = Path(args.champion)
     replay_dir = Path(args.replay_dir)
+    replay_manifest_path = Path(args.replay_manifest) if args.replay_manifest else replay_dir / "manifest.jsonl"
     archive_dir = Path(args.archive_dir)
     candidate_dir = Path(args.candidate_dir)
     candidate_dir.mkdir(parents=True, exist_ok=True)
@@ -224,7 +240,7 @@ def main():
     print(f"Device: {device}")
     print(f"Iteration tag: {iteration_tag}")
 
-    collect_self_play(
+    self_play_summary = collect_self_play(
         champion_path=champion_path,
         archive_dir=archive_dir,
         output_path=replay_path,
@@ -240,6 +256,24 @@ def main():
         selfplay_opponent_pool_size=args.selfplay_opponent_pool_size,
         seed=args.seed,
     )
+    append_replay_manifest(
+        replay_manifest_path,
+        {
+            "iteration_tag": iteration_tag,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "replay_path": str(self_play_summary["output_path"]),
+            "champion_path": str(champion_path),
+            "games": args.games,
+            "episodes": self_play_summary["episodes"],
+            "samples": self_play_summary["samples"],
+            "replay_window": args.replay_window,
+            "selfplay_sims": args.selfplay_sims,
+            "selfplay_worlds": args.selfplay_worlds,
+            "temperature_schedule": self_play_summary["temperature_schedule"],
+            "opponent_pool": self_play_summary["opponent_pool"],
+        },
+    )
+    print(f"Appended replay manifest entry to {replay_manifest_path}")
 
     replay_files = select_replay_files(replay_dir, args.replay_window)
     print("Training from replay files:")

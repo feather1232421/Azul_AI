@@ -3,3 +3,17 @@ __pycache__/
 *.py[cod]
 venv/
 .venv/
+
+# Transformer loop artifacts
+replays/
+azul_logs/
+debug_logs/
+debug_logs_smoke/
+debug_logs_transformer_vs_v4/
+champion_archive/transformer/
+models/transformer_candidate_*.pt
+models/transformer_candidate_*_last.pt
+
+# Archived legacy artifacts
+artifacts/
+replays_archive/
