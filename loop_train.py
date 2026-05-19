@@ -12,7 +12,7 @@ def build_iteration_command(run_iteration_path, forwarded_args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run multiple training iterations by repeatedly invoking run_iteration.py.",
+        description="Run multiple self-play/training/promotion iterations by repeatedly invoking run_iteration.py.",
     )
     parser.add_argument(
         "--iterations",
@@ -48,6 +48,8 @@ def main():
     print(f"Iterations: {args.iterations}")
     print(f"Pause seconds: {args.pause_seconds}")
     print(f"Forwarded args: {forwarded_args}")
+    if not forwarded_args:
+        print("Hint: defaults target the transformer loop. Pass --allow-promote when you want champion updates.")
 
     failures = []
 

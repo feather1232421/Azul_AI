@@ -10,7 +10,7 @@ import sys
 from explore_mtcs import MCTSAgent
 from ai import GreedyAgent
 import torch
-from azul_net import AzulNet
+from model_utils import load_model
 
 
 class AIAction(BaseModel):
@@ -186,18 +186,35 @@ def run_server(host="127.0.0.1", port=9999, agent=None):
 # =========================
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="models/transformer_champion.pt")
+    parser.add_argument("--host", type=str, default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=9999)
+    parser.add_argument("--n-simulations", type=int, default=1000)
+    parser.add_argument("--n-determinizations", type=int, default=4)
+    parser.add_argument("--puct-c", type=float, default=1.0)
+    parser.add_argument("--prior-temperature", type=float, default=1.0)
+    args = parser.parse_args()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = AzulNet(obs_dim=567, action_dim=180)
-    ckpt = torch.load(model_path("azul_net_v5.pt"), map_location=device)
-    net.load_state_dict(ckpt["model"])
-    net.to(device)
-    net.eval()
+    net, _, resolved_model_type = load_model(
+        model_path(args.model),
+        device=device,
+        obs_dim=567,
+        action_dim=180,
+    )
+    print(f"[Python] Loaded {args.model} as {resolved_model_type}")
     model_0 = MCTSAgent(
-        n_simulations=1000,
+        n_simulations=args.n_simulations,
+        n_determinizations=args.n_determinizations,
         my_player_idx=0,
         net=net,
         device=device,
         use_policy=True,
         use_value=True,
+        puct_c=args.puct_c,
+        prior_temperature=args.prior_temperature,
     )
-    run_server(agent=model_0)
+    run_server(host=args.host, port=args.port, agent=model_0)

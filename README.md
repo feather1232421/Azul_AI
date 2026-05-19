@@ -87,4 +87,28 @@ python battle.py
 ```bash
 python server.py
 ```
+## Transformer Loop (2026-05)
 
+Current transformer champion:
+
+```bash
+models/transformer_champion.pt
+```
+
+Run one self-play -> train -> arena iteration:
+
+```bash
+python run_iteration.py --allow-promote
+```
+
+Run multiple remote iterations:
+
+```bash
+python loop_train.py --iterations 10 --pause-seconds 5 --allow-promote
+```
+
+Useful overrides:
+
+```bash
+python run_iteration.py --games 300 --selfplay-sims 100 --train-epochs 6 --arena-games-per-side 10
+```

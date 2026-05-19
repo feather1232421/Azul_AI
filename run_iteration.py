@@ -173,20 +173,20 @@ def archive_and_promote(champion_path, candidate_path, archive_dir, iteration_ta
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--champion", type=str, default="azul_net_best.pt")
+    parser.add_argument("--champion", type=str, default="models/transformer_champion.pt")
     parser.add_argument("--replay-dir", type=str, default="replays")
-    parser.add_argument("--archive-dir", type=str, default="champion_archive")
+    parser.add_argument("--archive-dir", type=str, default="champion_archive/transformer")
     parser.add_argument("--candidate-dir", type=str, default="models")
     parser.add_argument("--games", type=int, default=200)
     parser.add_argument("--replay-window", type=int, default=5)
     parser.add_argument("--selfplay-sims", type=int, default=80)
     parser.add_argument("--selfplay-worlds", type=int, default=4)
     parser.add_argument("--train-epochs", type=int, default=8)
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--value-loss-weight", type=float, default=1.0)
-    parser.add_argument("--loser-policy-weight", type=float, default=1.0)
+    parser.add_argument("--value-loss-weight", type=float, default=0.5)
+    parser.add_argument("--loser-policy-weight", type=float, default=0.5)
     parser.add_argument("--train-ratio", type=float, default=0.9)
     parser.add_argument("--arena-games-per-side", type=int, default=20)
     parser.add_argument("--arena-sims", type=int, default=100)
@@ -216,7 +216,7 @@ def main():
 
     iteration_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
     replay_path = replay_dir / f"selfplay_{iteration_tag}.pkl"
-    candidate_path = candidate_dir / f"candidate_{iteration_tag}.pt"
+    candidate_path = candidate_dir / f"transformer_candidate_{iteration_tag}.pt"
     temperature_schedule = parse_temperature_schedule(args.temperature_schedule)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

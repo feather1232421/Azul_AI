@@ -163,6 +163,23 @@ class MCTSAgent:
         self.debug_label = debug_label or "mcts"
         self.debug_step = 0
 
+    def _build_forced_move_result(self, move, mask):
+        pi = np.zeros(self.action_dim, dtype=np.float32)
+        idx = REVERSE_LOOKUP[move]
+        pi[idx] = 1.0
+        return move, pi, mask
+
+    def _resolve_simulation_budget(self, legal_count):
+        if legal_count <= 1:
+            return 0
+        if legal_count <= 3:
+            return min(self.n_simulations, 32)
+        if legal_count <= 6:
+            return min(self.n_simulations, 48)
+        if legal_count <= 10:
+            return min(self.n_simulations, 64)
+        return self.n_simulations
+
     def _get_policy_obs_tensor(self, game):
         state = game.get_observation_current()
         obs = game.state_to_vector_np(state)
@@ -347,6 +364,11 @@ class MCTSAgent:
             idx = REVERSE_LOOKUP[move]
             mask[idx] = 1.0
 
+        if len(legal) == 1:
+            return self._build_forced_move_result(legal[0], mask)
+
+        effective_simulations = self._resolve_simulation_budget(len(legal))
+
         self.my_player_idx = game.current_player_idx
         root = MCTSNode(randomize_hidden_bag_for_search(game))
         # 先对 root 做一次 evaluate + expand
@@ -356,7 +378,7 @@ class MCTSAgent:
         for action, p in priors.items():
             root.add_child(action, prior=p)
 
-        for _ in range(self.n_simulations):
+        for _ in range(effective_simulations):
             node = root
             # Selection: 一直走到叶子（没有子节点的节点）
             while node.children and not node.game.is_game_over():
@@ -408,10 +430,15 @@ class MCTSAgent:
     def _search_multi(self, game):
         legal, mask = self._build_mask(game)
 
+        if len(legal) == 1:
+            return self._build_forced_move_result(legal[0], mask)
+
+        effective_simulations = self._resolve_simulation_budget(len(legal))
+
         self.my_player_idx = game.current_player_idx
-        n_worlds = max(1, min(self.n_determinizations, self.n_simulations))
-        sims_per_world = self.n_simulations // n_worlds
-        extra = self.n_simulations % n_worlds
+        n_worlds = max(1, min(self.n_determinizations, effective_simulations))
+        sims_per_world = effective_simulations // n_worlds
+        extra = effective_simulations % n_worlds
 
         roots = []
         for world_idx in range(n_worlds):
