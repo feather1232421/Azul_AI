@@ -494,10 +494,14 @@ class MCTSAgent:
             current.visits += 1
             # current.wins 记录的是：站在该节点视角下，这步棋有多好
             current.wins += v
-            # 核心：往父节点走时，视角取反
-            # 因为父节点的 wins 是相对于父节点那个玩家的
-            v = -v
-            current = current.parent
+            parent = current.parent
+            if parent is None:
+                break
+            # Azul 在回合结算后可能让同一位玩家继续成为 current_player，
+            # 这时父子节点视角没有切换，不能盲目取反。
+            if parent.game.current_player_idx != current.game.current_player_idx:
+                v = -v
+            current = parent
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：
     # 1.
