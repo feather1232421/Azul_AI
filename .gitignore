@@ -20,3 +20,4 @@ replays_archive/
 
 # model
 models/*.pt
+champion_archive/azul_net_*.pt
