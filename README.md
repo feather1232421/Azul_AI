@@ -4,8 +4,8 @@
 
 ## 📌 当前状态（2026-06）
 - 当前主线为 **Transformer Policy-Value Network + MCTS**。
-- `server.py` 默认加载 `models/transformer_champion.pt`，当前 champion 来源于 `transformer_candidate_20260519_213341.pt`。
-- 已建立人工审核的 curated cases，用于回归检查关键妙手/臭手局面；当前 `check_curated_cases.py` 结果为 `2/3`。
+- `server.py` 默认尝试加载本地 `models/transformer_champion.pt`；当前仓库暂未提供模型权重文件，需要自行在本地准备 checkpoint。
+- 已建立人工审核的 curated cases，用于回归检查关键妙手/错手局面；当前 `check_curated_cases.py` 结果为 `2/3`。
 - MCTS 小分支预算已针对实战配置做过一轮调整：当合法步较少时，会给出更高搜索预算，避免残局被过度截断。
 - 当前建议：继续沿着 **self-play -> 训练新模型 -> arena 对比 -> 真人对战补 case** 的闭环迭代，而不是回退到 PPO 路线。
 
@@ -97,7 +97,7 @@ python server.py
 ```
 ## Transformer 主线（2026-05 / 2026-06）
 
-当前 champion：
+本地主线默认模型路径：
 
 ```bash
 models/transformer_champion.pt
@@ -123,19 +123,19 @@ python run_iteration.py --games 300 --selfplay-sims 100 --train-epochs 6 --arena
 
 当前补充说明：
 
-- 当前 `server.py` 默认模型：`models/transformer_champion.pt`
-- 当前已知 champion 来源：`transformer_candidate_20260519_213341.pt`
+- 当前 `server.py` 默认模型路径：`models/transformer_champion.pt`
+- 当前仓库暂未提供模型权重文件；如需复现实验，需要自行准备本地 checkpoint
 - curated cases 当前通过数：`2/3`
 - curated dataset 已可导出到 `artifacts/curated_positions/`，但尚未正式接入训练流程
 
 Replay 持久化：
 
-- Each `run_iteration.py` call saves self-play training data locally as `replays/selfplay_<timestamp>.pkl`.
-- The loop then trains from the most recent replay files selected by `--replay-window`.
-- A lightweight manifest is appended to `replays/manifest.jsonl` so you can audit what each loop iteration generated.
+- 每次执行 `run_iteration.py`，都会将 self-play 训练数据保存为 `replays/selfplay_<timestamp>.pkl`。
+- 训练阶段会从最近的 replay 文件中按 `--replay-window` 选择输入数据。
+- 同时会向 `replays/manifest.jsonl` 追加一条轻量 manifest，便于追踪每轮迭代实际生成了什么数据。
 
 代码状态：
 
-- Active transformer path stays at repo root: `run_iteration.py`, `loop_train.py`, `get_dataset.py`, `train_mcts_nn.py`, `battle.py`, `server.py`.
-- Deprecated PPO/BC experiments now live under `legacy/ppo_bc/`.
-- Old root commands such as `train.py`, `train_bc.py`, `bc_to_ppo.py`, and `enjoy.py` are temporary compatibility wrappers and should not receive new work.
+- 当前仍在主线使用的 transformer 相关脚本位于仓库根目录：`run_iteration.py`、`loop_train.py`、`get_dataset.py`、`train_mcts_nn.py`、`battle.py`、`server.py`。
+- 已废弃的 PPO / BC 实验代码现已归档到 `legacy/ppo_bc/`。
+- 根目录下旧命令如 `train.py`、`train_bc.py`、`bc_to_ppo.py`、`enjoy.py` 目前仅作为兼容包装层保留，不建议继续在这些入口上新增工作。
