@@ -130,9 +130,79 @@ WHITE_PLACEMENT_CASE = {
 }
 
 
+RED_FIFTH_ROW_COLUMN_BONUS_CASE = {
+    "id": "red_fifth_row_column_bonus_endgame",
+    "category": "endgame_bonus_tactic",
+    "description": (
+        "Late-game red placement. Taking the single red from factory 1 into row 5 secures a "
+        "round-end column completion for +7 after a 5-point tile placement; starting row 3 "
+        "instead throws away the 12-point swing."
+    ),
+    "best_move": (1, 3, 4),
+    "z": 1.0,
+    "payload": {
+        "factories": [
+            [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
+            [cell(2), cell(3), cell(2), cell(1)],
+            [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
+            [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
+            [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
+        ],
+        "center": [cell(5)] + [empty_cell() for _ in range(23)],
+        "me": {
+            "score": 32,
+            "manualAreas": [
+                [cell(5)],
+                [cell(4), cell(4)],
+                [empty_cell(), empty_cell(), empty_cell()],
+                [cell(4), cell(4), cell(4), cell(4)],
+                [cell(3), cell(3), cell(3), cell(3), empty_cell()],
+            ],
+            "coloredAreas": [
+                [cell(1), cell(1), cell(1), cell(1), empty_cell()],
+                [cell(1), cell(1), cell(1), cell(1), empty_cell()],
+                [cell(1), cell(1), cell(1), cell(1), empty_cell()],
+                [empty_cell(), empty_cell(), cell(1), empty_cell(), empty_cell()],
+                [empty_cell(), empty_cell(), empty_cell(), empty_cell(), empty_cell()],
+            ],
+            "loseAreas": [empty_cell() for _ in range(7)],
+        },
+        "opponents": [
+            {
+                "score": 26,
+                "manualAreas": [
+                    [cell(2)],
+                    [cell(5), cell(5)],
+                    [cell(3), cell(3), cell(3)],
+                    [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
+                    [cell(1), cell(1), cell(1), cell(1), empty_cell()],
+                ],
+                "coloredAreas": [
+                    [cell(1), empty_cell(), empty_cell(), cell(1), cell(1)],
+                    [empty_cell(), cell(1), empty_cell(), cell(1), cell(1)],
+                    [cell(1), empty_cell(), empty_cell(), cell(1), empty_cell()],
+                    [cell(1), cell(1), empty_cell(), cell(1), empty_cell()],
+                    [cell(1), empty_cell(), empty_cell(), cell(1), empty_cell()],
+                ],
+                "loseAreas": [cell(6)] + [empty_cell() for _ in range(6)],
+            }
+        ],
+        "remainTokens": [{"color": color, "number": 0} for color in range(1, 6)],
+        "loseTokens": [
+            {"color": 1, "number": 9},
+            {"color": 2, "number": 12},
+            {"color": 3, "number": 8},
+            {"color": 4, "number": 8},
+            {"color": 5, "number": 11},
+        ],
+    },
+}
+
+
 CURATED_CASES = [
     END_ROUND_FIRST_PLAYER_CASE,
     WHITE_PLACEMENT_CASE,
+    RED_FIFTH_ROW_COLUMN_BONUS_CASE,
 ]
 
 

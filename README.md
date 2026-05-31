@@ -2,11 +2,12 @@
 
 本项目目标实现一个结合 **蒙特卡洛树搜索 (MCTS)** 与 **深度神经网络 (Policy-Value Network)** 的自博弈 AI，且AI能够自主学习并超越人类/启发式搜索水平。
 
-## 📌 当前状态（2026-04）
-- 当前主线为 **MCTS + Policy-Value Network**。
-- 近期已修复 MCTS 中一个关键的 **视角 bug**：父节点在选择子节点时，原先错误地直接使用了子节点视角的 `Q`，现已改为按当前节点视角比较。
-- 修复后，`policy + value` 搜索效果明显提升，当前版本 `azul_net_v4.pt` 在小样本对战中已经能够稳定战胜 `RandomAgent`，并在与 `GreedyAgent` 的对战中表现出可观竞争力。
-- 当前建议：继续沿着 **self-play -> 训练新模型 -> arena 对比** 的闭环迭代，而不是回退到 PPO 路线。
+## 📌 当前状态（2026-06）
+- 当前主线为 **Transformer Policy-Value Network + MCTS**。
+- `server.py` 默认加载 `models/transformer_champion.pt`，当前 champion 来源于 `transformer_candidate_20260519_213341.pt`。
+- 已建立人工审核的 curated cases，用于回归检查关键妙手/臭手局面；当前 `check_curated_cases.py` 结果为 `2/3`。
+- MCTS 小分支预算已针对实战配置做过一轮调整：当合法步较少时，会给出更高搜索预算，避免残局被过度截断。
+- 当前建议：继续沿着 **self-play -> 训练新模型 -> arena 对比 -> 真人对战补 case** 的闭环迭代，而不是回退到 PPO 路线。
 
 ## 🤝 团队协作 (Collaboration)
 本项目由两人共同开发：
@@ -30,12 +31,13 @@
 - [x] **策略蒸馏 (Distillation)**
   - 采集 N-Step 搜索数据，通过行为克隆 (BC) 预训练神经网络。
   - 将 BC 权重注入神经网络架构。
-- [ ] **强化学习终极目标 (MCTS + NN)**
+- [ ] **强化学习终极目标 (MCTS + NN / Transformer)**
   - [x] 实现 MCTS 树搜索框架，支持 Policy Prior 与 Value Evaluation。
   - [x] 训练目标重构：从 `(obs, action, z)` 转向 `(obs, pi, z)` 分布拟合。
   - [x] 修复 MCTS 选择阶段的视角一致性问题（`best_child` 中的 exploitation 项）。
   - [x] 建立 Greedy 教师数据采集脚本，可用于冷启动训练。
-  - [ ] 闭环 Self-play：通过 MCTS 迭代不断提升神经网络的先验能力。
+  - [x] 闭环 Self-play：当前已具备 `run_iteration.py` / `loop_train.py` 驱动的 transformer 自博弈训练主线。
+  - [ ] curated dataset 正式接入训练：当前 curated case 已建好与可导出，但还未并入训练脚本。
   - [ ] 性能对标：初步目标是超越人类新手水平，最终目标是达到或超越熟手或者专家水平。
 
 ## 📊 算法细节 (Algorithm Details)
@@ -57,9 +59,15 @@
 ## 🧩 关键文件
 - `logic.py`: 游戏规则、结算、合法动作、状态编码。
 - `explore_mtcs.py`: 当前主用 MCTS 实现，包含 policy/value 评估与回传。
-- `azul_net.py`: 当前 MCTS + NN 使用的双头网络。
+- `azul_transformer.py`: 当前主用 transformer policy-value 网络。
+- `azul_net.py`: 较早期的 MLP 双头网络实现，仍保留作兼容与对照。
 - `get_dataset.py`: 采集 MCTS self-play 数据或 Greedy 教师数据。
 - `train_mcts_nn.py`: 训练 policy-value 网络。
+- `run_iteration.py`: 执行一轮 self-play -> train -> arena -> promote。
+- `loop_train.py`: 批量循环运行多轮迭代。
+- `curated_cases.py`: 人工整理的关键局面回归集。
+- `check_curated_cases.py`: 检查当前模型是否能解出 curated cases。
+- `build_curated_dataset.py`: 从 curated cases 导出小型监督数据集。
 - `battle.py`: 多局对战测试脚本。
 - `server.py`: 使用网络和AI在Unity种进行对战。
 
@@ -83,43 +91,50 @@ python get_dataset.py --mode mcts --games 300 --output mcts_v4_selfplay.pkl --si
 python battle.py
 ```
 - 与Unity互动（上方链接提供的仓库）：
-  - 默认使用MCTS+azul_net_v4.pt模型，直接运行：
+  - 默认使用 transformer champion，直接运行：
 ```bash
 python server.py
 ```
-## Transformer Loop (2026-05)
+## Transformer 主线（2026-05 / 2026-06）
 
-Current transformer champion:
+当前 champion：
 
 ```bash
 models/transformer_champion.pt
 ```
 
-Run one self-play -> train -> arena iteration:
+执行一轮 self-play -> train -> arena：
 
 ```bash
 python run_iteration.py --allow-promote
 ```
 
-Run multiple remote iterations:
+连续跑多轮迭代：
 
 ```bash
 python loop_train.py --iterations 10 --pause-seconds 5 --allow-promote
 ```
 
-Useful overrides:
+常用覆盖参数：
 
 ```bash
 python run_iteration.py --games 300 --selfplay-sims 100 --train-epochs 6 --arena-games-per-side 10
 ```
 
-Replay persistence:
+当前补充说明：
+
+- 当前 `server.py` 默认模型：`models/transformer_champion.pt`
+- 当前已知 champion 来源：`transformer_candidate_20260519_213341.pt`
+- curated cases 当前通过数：`2/3`
+- curated dataset 已可导出到 `artifacts/curated_positions/`，但尚未正式接入训练流程
+
+Replay 持久化：
 
 - Each `run_iteration.py` call saves self-play training data locally as `replays/selfplay_<timestamp>.pkl`.
 - The loop then trains from the most recent replay files selected by `--replay-window`.
 - A lightweight manifest is appended to `replays/manifest.jsonl` so you can audit what each loop iteration generated.
 
-Code status:
+代码状态：
 
 - Active transformer path stays at repo root: `run_iteration.py`, `loop_train.py`, `get_dataset.py`, `train_mcts_nn.py`, `battle.py`, `server.py`.
 - Deprecated PPO/BC experiments now live under `legacy/ppo_bc/`.

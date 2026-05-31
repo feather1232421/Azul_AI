@@ -173,11 +173,11 @@ class MCTSAgent:
         if legal_count <= 1:
             return 0
         if legal_count <= 3:
-            return min(self.n_simulations, 32)
+            return min(self.n_simulations, 320)
         if legal_count <= 6:
-            return min(self.n_simulations, 48)
+            return min(self.n_simulations, 480)
         if legal_count <= 10:
-            return min(self.n_simulations, 64)
+            return min(self.n_simulations, 640)
         return self.n_simulations
 
     def _get_policy_obs_tensor(self, game):
