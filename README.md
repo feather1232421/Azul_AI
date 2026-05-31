@@ -70,6 +70,8 @@
 - `build_curated_dataset.py`: 从 curated cases 导出小型监督数据集。
 - `battle.py`: 多局对战测试脚本。
 - `server.py`: 使用网络和AI在Unity种进行对战。
+- `legacy/obsolete_root/`: 已从根目录移走的旧入口、兼容包装层与废弃训练脚本。
+- `tools/inspection/`: 一次性查看、调试、数据检查脚本。
 
 ## 🔧 常用命令
 - 采集 Greedy 教师数据：
@@ -138,4 +140,5 @@ Replay 持久化：
 
 - 当前仍在主线使用的 transformer 相关脚本位于仓库根目录：`run_iteration.py`、`loop_train.py`、`get_dataset.py`、`train_mcts_nn.py`、`battle.py`、`server.py`。
 - 已废弃的 PPO / BC 实验代码现已归档到 `legacy/ppo_bc/`。
-- 根目录下旧命令如 `train.py`、`train_bc.py`、`bc_to_ppo.py`、`enjoy.py` 目前仅作为兼容包装层保留，不建议继续在这些入口上新增工作。
+- 旧入口、兼容包装层和历史脚本已整理到 `legacy/obsolete_root/`；不建议继续在这些入口上新增工作。
+- 一次性调试与查看脚本已整理到 `tools/inspection/`，避免继续堆在根目录。
