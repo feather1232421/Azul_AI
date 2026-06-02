@@ -16,6 +16,8 @@ PLAYER_FACTORY_MAP = {
     4: 9
 }
 
+MAX_PLAYERS = 4
+
 TILES_PER_FACTORY = 4   # 每个板子上最多放4块砖
 COLOR_COUNT = 5         # 除去先手牌共有5种颜色
 BAG_INITIAL_COUNT = 20  # 每种颜色20块
@@ -63,5 +65,16 @@ def color_to_column(row_idx, color):
     公式：(color_id - 1 + row_idx) % 5
     """
     return (color - 1 + row_idx) % 5
+
+
+# Current transformer/MCTS mainline dimensions.
+# 4-player-capable observation layout:
+# 9 factories * 4 tiles * 6 one-hot = 216
+# center counts = 6
+# 4 player slots * (meta 4 + wall 25 + patterns 150 + floor 42) = 884
+# global meta = 2
+TRANSFORMER_OBS_DIM = 1108
+ACTION_DIM = 180
+VALUE_VECTOR_DIM = MAX_PLAYERS
 
 

@@ -6,7 +6,7 @@ import torch
 from tqdm import tqdm
 
 from ai import GreedyAgent
-from config import ACTION_LOOKUP, REVERSE_LOOKUP
+from config import ACTION_DIM, ACTION_LOOKUP, REVERSE_LOOKUP, TRANSFORMER_OBS_DIM
 from explore_mtcs import MCTSAgent
 from logic import AzulGame
 from model_utils import build_model, load_model
@@ -81,14 +81,21 @@ def choose_self_play_move(pi, step_idx, temperature_schedule=None):
     return ACTION_LOOKUP[move_idx]
 
 
-def finalize_episode(episode, winner):
+def finalize_episode(game, episode, values_by_player):
     labeled_episode = []
     for obs, pi, player_idx, mask in episode:
-        if winner == 2:
-            z = 0.0
+        player_count = int(round(obs[-2] * 4))
+        value_mask = np.zeros(4, dtype=np.float32)
+        value_mask[:player_count] = 1.0
+        if not values_by_player:
+            z = np.zeros(4, dtype=np.float32)
         else:
-            z = 1.0 if player_idx == winner else -1.0
-        labeled_episode.append((obs, pi, z, mask))
+            relative_values = np.asarray(
+                game.build_relative_value_vector(player_idx, values_by_player),
+                dtype=np.float32,
+            )
+            z = relative_values
+        labeled_episode.append((obs, pi, z, value_mask, mask))
     return labeled_episode
 
 
@@ -124,14 +131,7 @@ def play_episode(agents_by_player, temperature_schedule=None):
             game.play_turn(*move)
             step_idx += 1
 
-    if game.players[0].score > game.players[1].score:
-        winner = 0
-    elif game.players[1].score > game.players[0].score:
-        winner = 1
-    else:
-        winner = 2
-
-    return finalize_episode(episode, winner)
+    return finalize_episode(game, episode, game.get_rank_based_value_vector())
 
 
 def collect_data_from_matchups(matchups, by_episode=True, temperature_schedule=None):
@@ -186,14 +186,7 @@ def collect_greedy_data(games=100, agent=None, by_episode=True):
                 ))
                 game.play_turn(*move)
 
-        if game.players[0].score > game.players[1].score:
-            winner = 0
-        elif game.players[1].score > game.players[0].score:
-            winner = 1
-        else:
-            winner = 2
-
-        labeled_episode = finalize_episode(episode, winner)
+        labeled_episode = finalize_episode(game, episode, game.get_rank_based_value_vector())
         if by_episode:
             data.append(labeled_episode)
         else:
@@ -236,13 +229,14 @@ if __name__ == "__main__":
         output_path = args.output or "greedy_teacher_dataset.pkl"
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        net = build_model(model_type=args.model_type, obs_dim=567, action_dim=180)
+        net = build_model(model_type=args.model_type, obs_dim=TRANSFORMER_OBS_DIM, action_dim=ACTION_DIM)
         if args.model is not None:
-            net, _, loaded_type = load_model(
+            net, _, loaded_type, _ = load_model(
                 args.model,
                 device=device,
-                obs_dim=567,
-                action_dim=180,
+                obs_dim=TRANSFORMER_OBS_DIM,
+                action_dim=ACTION_DIM,
+                allow_partial_load=True,
             )
             print(f"Loaded model checkpoint as {loaded_type}")
         agent = MCTSAgent(
@@ -251,7 +245,7 @@ if __name__ == "__main__":
             my_player_idx=0,
             net=net,
             device=device,
-            action_dim=180,
+            action_dim=ACTION_DIM,
             puct_c=args.puct_c,
             prior_temperature=args.prior_temperature,
             root_dirichlet_alpha=args.dirichlet_alpha,

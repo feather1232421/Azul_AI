@@ -4,7 +4,7 @@
 
 ## 📌 当前状态（2026-06）
 - 当前主线为 **Transformer Policy-Value Network + MCTS**。
-- `server.py` 默认尝试加载本地 `models/transformer_champion.pt`；当前仓库暂未提供模型权重文件，需要自行在本地准备 checkpoint。
+- `server.py` 当前默认尝试加载本地 `models/transformer_multiplayer_base.pt`；该 checkpoint 是基于旧 2P champion partial warm-start 到新多人结构后的起始权重。
 - 已建立人工审核的 curated cases，用于回归检查关键妙手/错手局面；当前 `check_curated_cases.py` 结果为 `2/3`。
 - MCTS 小分支预算已针对实战配置做过一轮调整：当合法步较少时，会给出更高搜索预算，避免残局被过度截断。
 - 当前建议：继续沿着 **self-play -> 训练新模型 -> arena 对比 -> 真人对战补 case** 的闭环迭代，而不是回退到 PPO 路线。
@@ -37,7 +37,7 @@
   - [x] 修复 MCTS 选择阶段的视角一致性问题（`best_child` 中的 exploitation 项）。
   - [x] 建立 Greedy 教师数据采集脚本，可用于冷启动训练。
   - [x] 闭环 Self-play：当前已具备 `run_iteration.py` / `loop_train.py` 驱动的 transformer 自博弈训练主线。
-  - [ ] curated dataset 正式接入训练：当前 curated case 已建好与可导出，但还未并入训练脚本。
+  - [x] curated dataset 可选接入训练：先导出为单样本 episode，再通过 `run_iteration.py --curated-data-paths ...` 并入当前 transformer 训练主线。
   - [ ] 性能对标：初步目标是超越人类新手水平，最终目标是达到或超越熟手或者专家水平。
 
 ## 📊 算法细节 (Algorithm Details)
@@ -102,7 +102,7 @@ python server.py
 本地主线默认模型路径：
 
 ```bash
-models/transformer_champion.pt
+models/transformer_multiplayer_base.pt
 ```
 
 执行一轮 self-play -> train -> arena：
@@ -123,12 +123,25 @@ python loop_train.py --iterations 10 --pause-seconds 5 --allow-promote
 python run_iteration.py --games 300 --selfplay-sims 100 --train-epochs 6 --arena-games-per-side 10
 ```
 
+将 curated dataset 并入当前训练主线：
+
+```bash
+python build_curated_dataset.py --by-episode
+python run_iteration.py --curated-data-paths artifacts/curated_positions/curated_policy_cases.pkl
+```
+
+`--by-episode` 说明：
+
+- 当前 `run_iteration.py -> train_mcts_nn.py` 默认使用严格的 episode split。
+- 因此 curated dataset 需要导出成“每个 case 都是一个单样本 episode”的顶层结构，才能直接并入这条主线。
+- 不加 `--by-episode` 时，输出是 flat samples，更适合单独直接喂给 `train_mcts_nn.py`，不适合直接并入当前 `run_iteration.py` 主线。
+
 当前补充说明：
 
-- 当前 `server.py` 默认模型路径：`models/transformer_champion.pt`
+- 当前 `server.py` 默认模型路径：`models/transformer_multiplayer_base.pt`
 - 当前仓库暂未提供模型权重文件；如需复现实验，需要自行准备本地 checkpoint
 - curated cases 当前通过数：`2/3`
-- curated dataset 已可导出到 `artifacts/curated_positions/`，但尚未正式接入训练流程
+- curated dataset 已可导出到 `artifacts/curated_positions/`，可通过 `--curated-data-paths` 可选并入当前训练流程
 
 Replay 持久化：
 

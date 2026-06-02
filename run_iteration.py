@@ -10,6 +10,7 @@ from pathlib import Path
 
 import torch
 
+from config import ACTION_DIM, TRANSFORMER_OBS_DIM
 from battle import promotion_match
 from explore_mtcs import MCTSAgent
 from get_dataset import collect_data, collect_data_from_matchups, parse_temperature_schedule
@@ -21,7 +22,13 @@ ITERATION_TAG_RE = re.compile(r"(\d{8}_\d{6})")
 
 
 def load_net(model_path, device):
-    net, _, _ = load_model(model_path, device=device, obs_dim=567, action_dim=180)
+    net, _, _, _ = load_model(
+        model_path,
+        device=device,
+        obs_dim=TRANSFORMER_OBS_DIM,
+        action_dim=ACTION_DIM,
+        allow_partial_load=True,
+    )
     return net
 
 
@@ -42,7 +49,7 @@ def build_selfplay_agent(
         my_player_idx=0,
         net=net,
         device=device,
-        action_dim=180,
+        action_dim=ACTION_DIM,
         puct_c=puct_c,
         prior_temperature=prior_temperature,
         root_dirichlet_alpha=dirichlet_alpha,
@@ -169,6 +176,13 @@ def select_replay_files(replay_dir, replay_window):
     return replay_files
 
 
+def build_training_data_paths(replay_dir, replay_window, curated_data_paths=None):
+    training_paths = list(select_replay_files(replay_dir, replay_window))
+    if curated_data_paths:
+        training_paths.extend(Path(path) for path in curated_data_paths)
+    return training_paths
+
+
 def archive_and_promote(champion_path, candidate_path, archive_dir, iteration_tag):
     archive_dir.mkdir(parents=True, exist_ok=True)
     champion_path = Path(champion_path)
@@ -187,7 +201,7 @@ def append_replay_manifest(manifest_path, record):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--champion", type=str, default="models/transformer_champion.pt")
+    parser.add_argument("--champion", type=str, default="models/transformer_multiplayer_base.pt")
     parser.add_argument("--replay-dir", type=str, default="replays")
     parser.add_argument("--replay-manifest", type=str, default=None)
     parser.add_argument("--archive-dir", type=str, default="champion_archive/transformer")
@@ -219,6 +233,13 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--model-type", choices=["mlp", "transformer"], default="transformer")
+    parser.add_argument(
+        "--curated-data-paths",
+        type=str,
+        nargs="*",
+        default=None,
+        help="Optional extra dataset pickle paths to append during training. For curated cases, generate them with build_curated_dataset.py --by-episode so they stay compatible with strict episode splits.",
+    )
     parser.add_argument("--allow-promote", action="store_true")
     parser.add_argument("--no-promote", action="store_true")
     args = parser.parse_args()
@@ -275,14 +296,18 @@ def main():
     )
     print(f"Appended replay manifest entry to {replay_manifest_path}")
 
-    replay_files = select_replay_files(replay_dir, args.replay_window)
-    print("Training from replay files:")
-    for replay_file in replay_files:
-        print(f" - {replay_file}")
+    training_data_paths = build_training_data_paths(
+        replay_dir,
+        args.replay_window,
+        curated_data_paths=args.curated_data_paths,
+    )
+    print("Training from data files:")
+    for data_file in training_data_paths:
+        print(f" - {data_file}")
 
     train_summary = train(
         data_path=None,
-        data_paths=[str(path) for path in replay_files],
+        data_paths=[str(path) for path in training_data_paths],
         save_path=str(candidate_path),
         batch_size=args.batch_size,
         lr=args.lr,

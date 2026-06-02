@@ -7,9 +7,12 @@ import json
 import traceback
 import os
 import sys
+from datetime import datetime
+from pathlib import Path
 from explore_mtcs import MCTSAgent
 from ai import GreedyAgent
 import torch
+from config import ACTION_DIM, TRANSFORMER_OBS_DIM
 from model_utils import load_model
 
 
@@ -61,6 +64,23 @@ def send_message(sock, msg: str):
     data = msg.encode("utf-8")
     header = struct.pack("<I", len(data))  # 👈 小端
     sock.sendall(header + data)
+
+
+def append_raw_log(raw_log_path, raw_msg: str, reply: str, error: str = None):
+    if raw_log_path is None:
+        return
+
+    row = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "request_raw": raw_msg,
+        "response_raw": reply,
+    }
+    if error is not None:
+        row["error"] = error
+
+    raw_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with raw_log_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 # =========================
@@ -121,7 +141,7 @@ def choose_move(game,agent=None):
 # 4. 处理 Unity 消息
 # =========================
 
-def handle_obs_message(raw_msg: str,agent=None) -> str:
+def handle_obs_message(raw_msg: str, agent=None, raw_log_path=None) -> str:
 
     try:
         data = json.loads(raw_msg)
@@ -129,29 +149,37 @@ def handle_obs_message(raw_msg: str,agent=None) -> str:
         table_data = TableData(**data)
         game = AzulGame.from_table_data(table_data)
         game.display_all_info()
-        action = choose_move(game,agent)
-
-        return json.dumps(action, ensure_ascii=False)
+        action = choose_move(game, agent)
+        reply = json.dumps(action, ensure_ascii=False)
+        append_raw_log(raw_log_path, raw_msg, reply)
+        return reply
 
     except Exception as e:
         traceback.print_exc()
 
         # 出错也要返回一个合法结构，防止 Unity 崩
-        return json.dumps({
+        reply = json.dumps({
             "sourceId": -1,
             "color": 0,
             "destinationId": -1
         })
+        append_raw_log(raw_log_path, raw_msg, reply, error=repr(e))
+        return reply
 
 
 # =========================
 # 5. 主循环
 # =========================
 
-def run_server(host="127.0.0.1", port=9999, agent=None):
+def run_server(host="127.0.0.1", port=9999, agent=None, raw_log_dir=None):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((host, port))
     server.listen(1)
+    raw_log_path = None
+    if raw_log_dir:
+        raw_log_dir = Path(raw_log_dir)
+        raw_log_path = raw_log_dir / f"unity_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+        print(f"[Python] Raw logs -> {raw_log_path}")
 
     print(f"[Python] Server listening on {host}:{port}")
 
@@ -169,7 +197,7 @@ def run_server(host="127.0.0.1", port=9999, agent=None):
                 print("\n[Python] Received obs (前200字符):")
                 print(raw_msg[:200])
 
-                reply = handle_obs_message(raw_msg,agent)
+                reply = handle_obs_message(raw_msg, agent, raw_log_path=raw_log_path)
 
                 print("[Python] Sending action:")
                 print(reply)
@@ -189,21 +217,23 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="models/transformer_champion.pt")
+    parser.add_argument("--model", type=str, default="models/transformer_multiplayer_base.pt")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9999)
     parser.add_argument("--n-simulations", type=int, default=1000)
     parser.add_argument("--n-determinizations", type=int, default=4)
     parser.add_argument("--puct-c", type=float, default=1.0)
     parser.add_argument("--prior-temperature", type=float, default=1.0)
+    parser.add_argument("--raw-log-dir", type=str, default=None)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net, _, resolved_model_type = load_model(
+    net, _, resolved_model_type, _ = load_model(
         model_path(args.model),
         device=device,
-        obs_dim=567,
-        action_dim=180,
+        obs_dim=TRANSFORMER_OBS_DIM,
+        action_dim=ACTION_DIM,
+        allow_partial_load=True,
     )
     print(f"[Python] Loaded {args.model} as {resolved_model_type}")
     model_0 = MCTSAgent(
@@ -217,4 +247,4 @@ if __name__ == "__main__":
         puct_c=args.puct_c,
         prior_temperature=args.prior_temperature,
     )
-    run_server(host=args.host, port=args.port, agent=model_0)
+    run_server(host=args.host, port=args.port, agent=model_0, raw_log_dir=args.raw_log_dir)

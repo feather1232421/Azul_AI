@@ -1,4 +1,4 @@
-from config import REVERSE_LOOKUP
+from config import ACTION_DIM, REVERSE_LOOKUP, TRANSFORMER_OBS_DIM
 from curated_cases import END_ROUND_FIRST_PLAYER_CASE, build_game_from_case
 from explore_mtcs import MCTSAgent
 from model_utils import load_model
@@ -29,11 +29,12 @@ def main():
     assert bad_scores[0] < bad_scores[1], "Expected bad move to leave player 0 behind."
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net, _, resolved_model_type = load_model(
+    net, _, resolved_model_type, _ = load_model(
         "models/transformer_champion.pt",
         device=device,
-        obs_dim=567,
-        action_dim=180,
+        obs_dim=TRANSFORMER_OBS_DIM,
+        action_dim=ACTION_DIM,
+        allow_partial_load=True,
     )
     print(f"Loaded champion as {resolved_model_type} on {device}")
 
@@ -44,7 +45,7 @@ def main():
         my_player_idx=0,
         net=net,
         device=device,
-        action_dim=180,
+        action_dim=ACTION_DIM,
         puct_c=1.0,
         prior_temperature=1.0,
         root_dirichlet_alpha=0.0,

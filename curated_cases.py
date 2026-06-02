@@ -1,4 +1,4 @@
-from config import REVERSE_LOOKUP
+from config import MAX_PLAYERS, REVERSE_LOOKUP
 from logic import AzulGame
 from reconstruction_test import TableData
 import numpy as np
@@ -21,6 +21,7 @@ END_ROUND_FIRST_PLAYER_CASE = {
     ),
     "best_move": ("center", 2, 5),
     "z": 1.0,
+    "z_vec": [1.0, -1.0, 0.0, 0.0],
     "payload": {
         "factories": [[empty_cell() for _ in range(4)] for _ in range(5)],
         "center": [cell(2), cell(4), cell(4), cell(4), cell(4)] + [empty_cell() for _ in range(19)],
@@ -77,6 +78,7 @@ WHITE_PLACEMENT_CASE = {
     ),
     "best_move": (3, 5, 4),
     "z": 0.0,
+    "z_vec": [0.0, 0.0, 0.0, 0.0],
     "payload": {
         "factories": [
             [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
@@ -140,6 +142,7 @@ RED_FIFTH_ROW_COLUMN_BONUS_CASE = {
     ),
     "best_move": (1, 3, 4),
     "z": 1.0,
+    "z_vec": [1.0, -1.0, 0.0, 0.0],
     "payload": {
         "factories": [
             [empty_cell(), empty_cell(), empty_cell(), empty_cell()],
@@ -232,6 +235,21 @@ def build_mask(legal_moves):
     return mask
 
 
+def build_case_value_vector(case, game):
+    if "z_vec" in case:
+        z_vec = np.asarray(case["z_vec"], dtype=np.float32)
+        if z_vec.shape != (MAX_PLAYERS,):
+            raise ValueError(f"Case {case['id']} has invalid z_vec shape: {z_vec.shape}")
+        return z_vec
+
+    z_value = float(case.get("z", 0.0))
+    z_vec = np.zeros(MAX_PLAYERS, dtype=np.float32)
+    z_vec[0] = z_value
+    if game.num_players >= 2:
+        z_vec[1] = -z_value
+    return z_vec
+
+
 def build_training_sample(case, best_prob=1.0):
     game = build_game_from_case(case)
     obs = game.state_to_vector_np(game.get_observation_current())
@@ -241,5 +259,8 @@ def build_training_sample(case, best_prob=1.0):
         raise ValueError(f"Best move {best_move} is not legal for case {case['id']}")
     pi = build_policy_target(best_move, legal_moves, best_prob=best_prob)
     mask = build_mask(legal_moves)
-    z = float(case.get("z", 0.0))
-    return obs, pi, z, mask
+    player_count = game.num_players
+    value_mask = np.zeros(MAX_PLAYERS, dtype=np.float32)
+    value_mask[:player_count] = 1.0
+    z = build_case_value_vector(case, game)
+    return obs, pi, z, value_mask, mask

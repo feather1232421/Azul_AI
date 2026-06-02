@@ -64,7 +64,7 @@ class MCTSNode:
         self.children_actions = {}  # 新增：用字典快速检索 {action: child_node}
 
         self.visits = 0
-        self.wins = 0.0
+        self.value_sum = np.zeros(MAX_PLAYERS, dtype=np.float32)
         self.game = game  # clone过来的AzulGame实例
         self.parent = parent
         self.action = action  # (从哪拿, 颜色, 放哪里)
@@ -85,7 +85,7 @@ class MCTSNode:
 
     # new
     def ucb_score(self, C=1.4):
-        q_value = 0.0 if self.visits == 0 else self.wins / self.visits
+        q_value = 0.0 if self.visits == 0 else self.value_sum[self.player_idx] / self.visits
         if self.parent is None:
             u_value = 0.0
         else:
@@ -97,9 +97,8 @@ class MCTSNode:
 
     def best_child(self, C=1.4):
         def score(child):
-            # child.wins / child.visits 是“子节点行动方视角”的价值。
-            # 对当前节点来说，走到这个 child 后轮到对手，因此 exploitation 要取反。
-            q_value = 0.0 if child.visits == 0 else -(child.wins / child.visits)
+            current_player = self.game.current_player_idx
+            q_value = 0.0 if child.visits == 0 else (child.value_sum[current_player] / child.visits)
             return q_value + C * child.prior * math.sqrt(self.visits + 1e-8) / (1 + child.visits)
 
         return max(self.children, key=score)
@@ -130,7 +129,7 @@ class MCTSAgent:
         my_player_idx=0,
         net=None,
         device=None,
-        action_dim=180,
+        action_dim=ACTION_DIM,
         use_policy=True,
         use_value=True,
         puct_c=1.4,
@@ -202,7 +201,7 @@ class MCTSAgent:
         with torch.no_grad():
             _, value_logit = self.net(obs)
             value = torch.tanh(value_logit)
-        return value.item()
+        return value.squeeze(0).cpu().numpy()
 
     # def _evaluate(self, game):
     #     obs = self._get_value_obs_tensor(game)
@@ -234,7 +233,10 @@ class MCTSAgent:
             # 调用新的 AzulTransformer
             policy_logits, value_logit = self.net(obs)
 
-            value = torch.tanh(value_logit).item() if self.use_value else 0.0
+            if self.use_value:
+                value = torch.tanh(value_logit).squeeze(0).cpu().numpy()
+            else:
+                value = np.zeros(MAX_PLAYERS, dtype=np.float32)
             policy_vector = policy_logits.squeeze(0).cpu().numpy()
 
         return policy_vector, value
@@ -297,17 +299,17 @@ class MCTSAgent:
 
     def _aggregate_roots(self, roots):
         total_visits = {}
-        total_wins = {}
+        total_value_sums = {}
         total_priors = {}
 
         for root in roots:
             for child in root.children:
                 action = child.action
                 total_visits[action] = total_visits.get(action, 0) + child.visits
-                total_wins[action] = total_wins.get(action, 0.0) + child.wins
+                total_value_sums[action] = total_value_sums.get(action, np.zeros(MAX_PLAYERS, dtype=np.float32)) + child.value_sum
                 total_priors[action] = total_priors.get(action, 0.0) + child.prior
 
-        return total_visits, total_wins, total_priors
+        return total_visits, total_value_sums, total_priors
 
     def _build_pi_from_visit_dict(self, visit_dict):
         pi = np.zeros(self.action_dim, dtype=np.float32)
@@ -319,7 +321,7 @@ class MCTSAgent:
             pi /= s
         return pi
 
-    def _write_debug_log(self, game, chosen_move, total_visits, total_wins, total_priors, roots):
+    def _write_debug_log(self, game, chosen_move, total_visits, total_value_sums, total_priors, roots):
         if self.debug_log_path is None:
             return
 
@@ -327,13 +329,15 @@ class MCTSAgent:
         root_values = []
         for root in roots:
             if root.children:
-                root_values.append(max((-child.wins / child.visits) if child.visits > 0 else 0.0 for child in root.children))
+                current_player = root.game.current_player_idx
+                root_values.append(max((child.value_sum[current_player] / child.visits) if child.visits > 0 else 0.0 for child in root.children))
 
         move_rows = []
         n_roots = max(len(roots), 1)
         for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:self.debug_top_k]:
-            wins = total_wins.get(action, 0.0)
-            q_value = -(wins / visits) if visits > 0 else 0.0
+            value_sum = total_value_sums.get(action, np.zeros(MAX_PLAYERS, dtype=np.float32))
+            current_player = game.current_player_idx
+            q_value = (value_sum[current_player] / visits) if visits > 0 else 0.0
             move_rows.append({
                 "move": list(action),
                 "visits": int(visits),
@@ -448,7 +452,7 @@ class MCTSAgent:
             root_game = randomize_hidden_bag_for_search(game)
             roots.append(self._run_single_search(root_game, sims_this_world))
 
-        total_visits, total_wins, total_priors = self._aggregate_roots(roots)
+        total_visits, total_value_sums, total_priors = self._aggregate_roots(roots)
 
         if not total_visits:
             print("not root children")
@@ -460,7 +464,7 @@ class MCTSAgent:
 
         move = max(total_visits.items(), key=lambda item: item[1])[0]
         pi = self._build_pi_from_visit_dict(total_visits)
-        self._write_debug_log(game, move, total_visits, total_wins, total_priors, roots)
+        self._write_debug_log(game, move, total_visits, total_value_sums, total_priors, roots)
 
         # for action, visits in sorted(total_visits.items(), key=lambda item: -item[1])[:2]:
         #     wins = total_wins.get(action, 0.0)
@@ -479,29 +483,28 @@ class MCTSAgent:
         return self._search_multi(game)
 
     def _terminal_value(self, node):
-        winner = node.game.get_game_result()
-        if winner == -1:
-            return 0.0  # 平局
-        # value 定义为当前节点行动方视角下的终局结果
-        current_player = node.game.current_player_idx
-        return 1.0 if winner == current_player else -1.0
+        values_by_player = node.game.get_rank_based_value_vector()
+        return np.asarray(
+            node.game.build_relative_value_vector(node.game.current_player_idx, values_by_player),
+            dtype=np.float32,
+        )
 
     def _backprop(self, node, value):
-        # value: 神经网络或终局算出的值 (针对 node.game 的当前玩家)
+        absolute_values = np.zeros(MAX_PLAYERS, dtype=np.float32)
+        leaf_current_player = node.game.current_player_idx
+        for offset in range(node.game.num_players):
+            player_idx = (leaf_current_player + offset) % node.game.num_players
+            absolute_values[player_idx] = value[offset]
+
         current = node
-        v = value
         while current is not None:
             current.visits += 1
-            # current.wins 记录的是：站在该节点视角下，这步棋有多好
-            current.wins += v
-            parent = current.parent
-            if parent is None:
-                break
-            # Azul 在回合结算后可能让同一位玩家继续成为 current_player，
-            # 这时父子节点视角没有切换，不能盲目取反。
-            if parent.game.current_player_idx != current.game.current_player_idx:
-                v = -v
-            current = parent
+            relative_values = np.asarray(
+                current.game.build_relative_value_vector(current.game.current_player_idx, absolute_values),
+                dtype=np.float32,
+            )
+            current.value_sum += relative_values
+            current = current.parent
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：
     # 1.
@@ -553,111 +556,3 @@ class MCTSAgent:
 #         return policy_logits, value_logit
 
 
-class MCTSAgentGreedy:
-    def __init__(self, n_simulations=200, my_player_idx=0):
-        self.n_simulations = n_simulations
-        self.my_player_idx = my_player_idx
-        self.greedy_agent = GreedyAgent()  # 你现有的GreedyAgent
-
-    def _rollout(self, game):
-        sim_game = copy.deepcopy(game)
-        round_count = 0
-        while not sim_game.is_game_over():
-            while not sim_game.public_board.is_empty():
-                # 换成Greedy决策而不是随机
-                move = self.greedy_agent.decide(sim_game)
-                sim_game.play_turn(*move)
-
-            sim_game._internal_scoring_flow()
-            round_count += 1
-            if round_count > 20:
-                break
-
-        my_score = sim_game.players[self.my_player_idx].score
-        opp_score = sim_game.players[1 - self.my_player_idx].score
-        return 1.0 if my_score > opp_score else 0.0
-
-    def decide(self, game):
-        # 决策时记录当前是谁在走
-        self.my_player_idx = game.current_player_idx
-
-        root = MCTSNode(randomize_hidden_bag_for_search(game))
-
-        for _ in range(self.n_simulations):
-            node = root
-
-            # Selection
-            while node.is_fully_expanded() and node.children:
-                # 判断当前节点轮到谁走
-                if node.game.current_player_idx == self.my_player_idx:
-                    node = node.best_child(C=1.4)  # 我方：选最优
-                else:
-                    node = node.best_child(C=1.4)  # 对方：暂时也选最优（假设对手也理性）
-
-            # Expansion
-            if node.untried_actions:
-                action = node.untried_actions.pop()
-                node = node.add_child(action)
-
-
-            # Simulation
-            result = self._rollout(node.game)
-
-            # Backpropagation：对手节点的wins要取反
-            current = node
-            while current is not None:
-                current.visits += 1
-                if current.player_idx == self.my_player_idx:
-                    current.wins += result
-                else:
-                    current.wins += (1.0 - result)
-                current = current.parent
-
-        return max(root.children, key=lambda c: c.visits).action
-
-
-def collect_data(agent, games=100):
-    data = []
-    game = AzulGame()
-
-    for i in range(games):
-        game.reset()
-        episode_data = []
-        round_count = 0
-
-        while not game.is_game_over():
-            while not game.public_board.is_empty():
-                curr_idx = game.current_player_idx
-                state = game.get_observation_for_player(curr_idx)
-                obs = game.state_to_vector_np(state)
-
-                move, _ = agent.decide(game)
-                episode_data.append((obs, curr_idx))
-                game.play_turn(*move)
-
-            game._internal_scoring_flow()
-            round_count += 1
-            if round_count > 20:
-                break
-
-        # 胜负标签
-        winner = 0 if game.players[0].score > game.players[1].score else 1
-
-        for obs, player_idx in episode_data:
-            value = 1.0 if player_idx == winner else 0.0
-            data.append((obs, value))
-
-        if (i + 1) % 10 == 0:
-            print(f"收集进度: {i + 1}/{games}局, 数据量: {len(data)}")
-
-    return data
-
-
-if __name__ == "__main__":
-    # 用之前能打67%胜率的Greedy rollout版MCTS
-    greedy_mcts = MCTSAgentGreedy(n_simulations=200)  # 用greedy rollout的版本
-    data = collect_data(greedy_mcts, games=100)
-    print(f"收集到{len(data)}条数据")
-    with open("search3_greedy_dataset.pkl", "wb") as f:
-        pickle.dump(data, f)
-    pass

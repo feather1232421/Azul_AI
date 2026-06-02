@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 
+from config import ACTION_DIM, TRANSFORMER_OBS_DIM
 from logic import AzulGame
 from explore_mtcs import MCTSAgent
 from model_utils import load_model
@@ -19,11 +20,12 @@ def play_one_game(agent_0, agent_1):
 
     p0 = game.players[0].score
     p1 = game.players[1].score
+    winners = game.get_winners()
     return {
         "p0_score": p0,
         "p1_score": p1,
         "margin": p0 - p1,
-        "winner": 0 if p0 > p1 else 1 if p1 > p0 else -1,
+        "winner": winners[0] if len(winners) == 1 else -1,
     }
 
 
@@ -69,11 +71,12 @@ def build_mcts_agent(
     debug_log_path=None,
     debug_label=None,
 ):
-    net, _, resolved_model_type = load_model(
+    net, _, resolved_model_type, _ = load_model(
         model_path,
         device=device,
-        obs_dim=567,
-        action_dim=180,
+        obs_dim=TRANSFORMER_OBS_DIM,
+        action_dim=ACTION_DIM,
+        allow_partial_load=True,
     )
     print(f"Loaded {Path(model_path).name} as {resolved_model_type}")
     return MCTSAgent(

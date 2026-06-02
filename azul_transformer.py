@@ -1,21 +1,26 @@
 import torch
 import torch.nn as nn
 
+from config import VALUE_VECTOR_DIM
+
 
 class AzulTransformer(nn.Module):
     def __init__(self, d_model=64, nhead=4, num_layers=3, action_dim=180):
         super().__init__()
-        self.num_tokens = 23
+        self.num_factory_tokens = 9
+        self.num_player_tokens = 4
+        self.tokens_per_player = 8
+        self.num_tokens = 1 + self.num_factory_tokens + 1 + self.num_player_tokens * self.tokens_per_player
 
         self.factory_emb = nn.Linear(24, d_model)
         self.center_emb = nn.Linear(6, d_model)
+        self.player_meta_emb = nn.Linear(4, d_model)
         self.pattern_emb = nn.Linear(30, d_model)
         self.wall_emb = nn.Linear(25, d_model)
         self.floor_emb = nn.Linear(42, d_model)
-        self.score_emb = nn.Linear(1, d_model)
-        self.global_emb = nn.Linear(5, d_model)
+        self.global_emb = nn.Linear(2, d_model)
         self.position_emb = nn.Embedding(self.num_tokens, d_model)
-        self.token_type_emb = nn.Embedding(11, d_model)
+        self.token_type_emb = nn.Embedding(5, d_model)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
@@ -29,20 +34,14 @@ class AzulTransformer(nn.Module):
         self.value_head = nn.Sequential(
             nn.Linear(d_model, 64),
             nn.ReLU(),
-            nn.Linear(64, 1),
+            nn.Linear(64, VALUE_VECTOR_DIM),
         )
 
         token_type_ids = [0]
-        token_type_ids.extend([1] * 5)
+        token_type_ids.extend([1] * self.num_factory_tokens)
         token_type_ids.extend([2])
-        token_type_ids.extend([3])
-        token_type_ids.extend([4] * 5)
-        token_type_ids.extend([5])
-        token_type_ids.extend([6])
-        token_type_ids.extend([7])
-        token_type_ids.extend([8] * 5)
-        token_type_ids.extend([9])
-        token_type_ids.extend([10])
+        for _ in range(self.num_player_tokens):
+            token_type_ids.extend([3, 4, 4, 4, 4, 4, 4, 4])
         self.register_buffer(
             "token_type_ids",
             torch.tensor(token_type_ids, dtype=torch.long),
@@ -50,33 +49,33 @@ class AzulTransformer(nn.Module):
         )
 
     def forward(self, x):
-        factories = x[:, 0:120].view(-1, 5, 24)
-        center = x[:, 120:126].unsqueeze(1)
-        my_wall = x[:, 126:151].unsqueeze(1)
-        my_patterns = x[:, 151:301].view(-1, 5, 30)
-        my_floor = x[:, 301:343].unsqueeze(1)
-        my_score = x[:, 343:344].unsqueeze(1)
+        ptr = 0
+        factories = x[:, ptr:ptr + 216].view(-1, self.num_factory_tokens, 24)
+        ptr += 216
+        center = x[:, ptr:ptr + 6].unsqueeze(1)
+        ptr += 6
 
-        opp_wall = x[:, 344:369].unsqueeze(1)
-        opp_patterns = x[:, 369:519].view(-1, 5, 30)
-        opp_floor = x[:, 519:561].unsqueeze(1)
-        opp_score = x[:, 561:562].unsqueeze(1)
+        player_tokens = []
+        for _ in range(self.num_player_tokens):
+            player_meta = x[:, ptr:ptr + 4].unsqueeze(1)
+            ptr += 4
+            player_wall = x[:, ptr:ptr + 25].unsqueeze(1)
+            ptr += 25
+            player_patterns = x[:, ptr:ptr + 150].view(-1, 5, 30)
+            ptr += 150
+            player_floor = x[:, ptr:ptr + 42].unsqueeze(1)
+            ptr += 42
 
-        global_feat = x[:, -5:]
+            player_tokens.extend([
+                self.player_meta_emb(player_meta),
+                self.wall_emb(player_wall),
+                self.pattern_emb(player_patterns),
+                self.floor_emb(player_floor),
+            ])
 
-        tokens = [
-            self.global_emb(global_feat).unsqueeze(1),
-            self.factory_emb(factories),
-            self.center_emb(center),
-            self.wall_emb(my_wall),
-            self.pattern_emb(my_patterns),
-            self.floor_emb(my_floor),
-            self.score_emb(my_score),
-            self.wall_emb(opp_wall),
-            self.pattern_emb(opp_patterns),
-            self.floor_emb(opp_floor),
-            self.score_emb(opp_score),
-        ]
+        global_feat = x[:, ptr:ptr + 2]
+
+        tokens = [self.global_emb(global_feat).unsqueeze(1), self.factory_emb(factories), self.center_emb(center), *player_tokens]
 
         combined_tokens = torch.cat(tokens, dim=1)
         batch_size = combined_tokens.size(0)
@@ -93,6 +92,6 @@ class AzulTransformer(nn.Module):
         feat = feat_seq[:, 0, :]
 
         policy_logits = self.policy_head(feat)
-        value_logit = self.value_head(feat).squeeze(-1)
+        value_logit = self.value_head(feat)
 
         return policy_logits, value_logit

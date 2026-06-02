@@ -3,6 +3,7 @@ from config import *  # 导入你之前定义的颜色常量
 import torch
 import numpy as np
 import copy
+import warnings
 
 
 class AzulGame:
@@ -186,121 +187,151 @@ class AzulGame:
     def get_observation_current(self):
         # 确定当前轮到谁
         me_idx = self.current_player_idx
-
-        # 重新排列玩家列表：第一个永远是“我”，后面是“其他人”
-        # 比如 3 人局，轮到 1 号动，列表就是 [Player1, Player2, Player0]
-        sorted_players = [self.players[me_idx]] + \
-                         [self.players[i] for i in range(self.num_players) if i != me_idx]
-
-        state = {
-            "factories": self.public_board.factories,
-            "center": self.public_board.center,
-            "me": sorted_players[0].to_dict(),  # 给 PlayerBoard 加个转字典的方法
-            "opponents": [p.to_dict() for p in sorted_players[1:]]
-        }
-        return state
+        return self._build_observation_for_relative_order(me_idx)
 
     # 在 logic.py 中增加这个方法，支持指定视角
     def get_observation_for_player(self, target_player_idx):
-        # 第一个永远是指定的 target_player
-        sorted_players = [self.players[target_player_idx]] + \
-                         [self.players[i] for i in range(self.num_players) if i != target_player_idx]
+        return self._build_observation_for_relative_order(target_player_idx)
 
-        state = {
+    def _build_relative_players(self, anchor_player_idx, max_player_slots=MAX_PLAYERS):
+        ordered_players = []
+        for offset in range(self.num_players):
+            player_idx = (anchor_player_idx + offset) % self.num_players
+            player_state = self.players[player_idx].to_dict()
+            player_state["seat_idx"] = player_idx
+            player_state["relative_offset"] = offset
+            player_state["player_present"] = 1.0
+            player_state["has_first_player_marker"] = 1.0 if FIRST_PLAYER in self.players[player_idx].floor else 0.0
+            player_state["wall_progress"] = sum(row.count(True) for row in self.players[player_idx].wall) / 25.0
+            ordered_players.append(player_state)
+
+        while len(ordered_players) < max_player_slots:
+            ordered_players.append({
+                "score": 0,
+                "pattern_lines": [[EMPTY] * (i + 1) for i in range(5)],
+                "wall": [[False] * 5 for _ in range(5)],
+                "floor": [],
+                "seat_idx": -1,
+                "relative_offset": len(ordered_players),
+                "player_present": 0.0,
+                "has_first_player_marker": 0.0,
+                "wall_progress": 0.0,
+            })
+
+        return ordered_players[:max_player_slots]
+
+    def _build_global_observation_summary(self, ordered_players):
+        me = ordered_players[0]
+        me_score = me["score"]
+        score_deltas = []
+        for player_state in ordered_players[1:]:
+            if player_state["player_present"] > 0.5:
+                score_deltas.append((player_state["score"] - me_score) / 50.0)
+            else:
+                score_deltas.append(0.0)
+
+        return {
+            "player_count": self.num_players,
+            "factory_count": self.public_board.factory_count,
+            "current_player_idx": self.current_player_idx,
+            "score_deltas_from_me": score_deltas,
+        }
+
+    def _build_observation_for_relative_order(self, anchor_player_idx):
+        ordered_players = self._build_relative_players(anchor_player_idx)
+        return {
             "factories": self.public_board.factories,
             "center": self.public_board.center,
-            "me": sorted_players[0].to_dict(),
-            "opponents": [p.to_dict() for p in sorted_players[1:]]
+            "me": ordered_players[0],
+            "opponents": ordered_players[1:self.num_players],
+            "players_relative": ordered_players,
+            "global": self._build_global_observation_summary(ordered_players),
         }
-        return state
+
+    def build_relative_value_vector(self, anchor_player_idx, values_by_player, max_player_slots=MAX_PLAYERS):
+        relative_values = [0.0] * max_player_slots
+        for offset in range(self.num_players):
+            player_idx = (anchor_player_idx + offset) % self.num_players
+            relative_values[offset] = float(values_by_player[player_idx])
+        return relative_values
 
     def state_to_vector_np(sefl, state):
-        # 预分配 567 维空间
-        vec = np.zeros(567, dtype=np.float32)
+        # Current transformer/MCTS observation encoder.
+        # This is the active mainline path and the one to evolve for 3P/4P support.
+        # Uses a fixed 4-player-capable layout with relative player ordering.
+        vec = np.zeros(TRANSFORMER_OBS_DIM, dtype=np.float32)
         ptr = 0
 
-        # --- 1. 工厂 (120维) ---
-        # 每个工厂 4 格，每格 6 位 one-hot
-        factories = np.array(state['factories'])  # 假设是 (5, 4)
-        for tile in factories.flatten():
-            # tile 是 0-5，直接在偏移量上填 1
+        # --- 1. 工厂 (9 * 4 * 6 = 216维) ---
+        factories = list(state["factories"])
+        while len(factories) < PLAYER_FACTORY_MAP[4]:
+            factories.append([EMPTY] * TILES_PER_FACTORY)
+        factories = factories[:PLAYER_FACTORY_MAP[4]]
+        for tile in np.array(factories).flatten():
             vec[ptr + tile] = 1.0
             ptr += 6
 
         # --- 2. 中心 (6维) ---
-        center = state['center']
+        center = state["center"]
         for tile in center:
             if 1 <= tile <= 6:
-                vec[ptr + tile - 1] += 1.0  # 统计法，不需要 one-hot
+                vec[ptr + tile - 1] += 1.0
         ptr += 6
 
-        # --- 3. 我方状态 ---
-        me = state['me']
+        players_relative = state.get("players_relative")
+        if players_relative is None:
+            players_relative = [state["me"], *state["opponents"]]
+            while len(players_relative) < 4:
+                players_relative.append({
+                    "score": 0,
+                    "pattern_lines": [[EMPTY] * (i + 1) for i in range(5)],
+                    "wall": [[False] * 5 for _ in range(5)],
+                    "floor": [],
+                    "player_present": 0.0,
+                    "has_first_player_marker": 0.0,
+                })
+        players_relative = players_relative[:4]
+        me_score = players_relative[0]["score"]
 
-        # 墙面 (25维): 直接用 flatten 覆盖
-        wall = np.array(me['wall'], dtype=np.float32).flatten()
-        vec[ptr: ptr + 25] = wall
-        ptr += 25
+        # --- 3. 玩家块 (4 * 221维) ---
+        for player_state in players_relative:
+            vec[ptr] = player_state.get("player_present", 1.0)
+            vec[ptr + 1] = player_state["score"] / 150.0
+            vec[ptr + 2] = (player_state["score"] - me_score) / 50.0 if player_state.get("player_present", 1.0) > 0.5 else 0.0
+            vec[ptr + 3] = player_state.get("has_first_player_marker", 0.0)
+            ptr += 4
 
-        # 准备区 (150维): 5行 * 5格 * 6(one-hot)
-        for line in me['pattern_lines']:
-            # 补齐到 5 格
-            padded = line + [0] * (5 - len(line))
-            for tile in padded:
-                vec[ptr + tile] = 1.0
-                ptr += 6
-
-        # 分数归一化 (1维)
-        vec[ptr] = me['score'] / 150.0
-        ptr += 1
-
-        # 地板 (42维): 7格 * 6(one-hot)
-        floor = (me['floor'] + [0] * 7)[:7]
-        for tile in floor:
-            vec[ptr + tile] = 1.0
-            ptr += 6
-
-        # --- 4. 对方状态 (同样逻辑，省略重复部分，假设偏移量对齐) ---
-        # ... 这里重复一遍 me 的逻辑填充对方数据 ...
-        # --- 4. 对方状态 ---
-        for opp in state['opponents']:
-            opp_wall = np.array(opp['wall'], dtype=np.float32).flatten()
-            vec[ptr: ptr + 25] = opp_wall
+            wall = np.array(player_state["wall"], dtype=np.float32).flatten()
+            vec[ptr: ptr + 25] = wall
             ptr += 25
 
-            for line in opp['pattern_lines']:
+            for line in player_state["pattern_lines"]:
                 padded = line + [0] * (5 - len(line))
                 for tile in padded:
                     vec[ptr + tile] = 1.0
                     ptr += 6
 
-            vec[ptr] = opp['score'] / 150.0
-            ptr += 1
-
-            floor = (opp['floor'] + [0] * 7)[:7]
+            floor = (player_state["floor"] + [0] * 7)[:7]
             for tile in floor:
                 vec[ptr + tile] = 1.0
                 ptr += 6
-        # 然后再填 5 维灵魂特征
-        ptr = 562
 
-        # --- 5. 灵魂特征 (新增的 5 维) ---
-        # 先手标志 (假设 6 代表 1号标)
-        vec[ptr] = 1.0 if 6 in me['floor'] else 0.0
-        vec[ptr + 1] = 1.0 if any(6 in opp['floor'] for opp in state['opponents']) else 0.0
-
-        # 进度感知
-        vec[ptr + 2] = sum(row.count(True) for row in me['wall']) / 25.0
-        # 对方进度也得看，不然不知道对面要赢了
-        opp_wall = state['opponents'][0]['wall']
-        vec[ptr + 3] = sum(row.count(True) for row in opp_wall) / 25.0
-
-        # 分差
-        vec[ptr + 4] = (me['score'] - state['opponents'][0]['score']) / 50.0
+        # --- 4. 全局摘要 (2维) ---
+        global_state = state.get("global", {})
+        vec[ptr] = global_state.get("player_count", len(players_relative)) / 4.0
+        vec[ptr + 1] = global_state.get("factory_count", len(state["factories"])) / float(PLAYER_FACTORY_MAP[4])
 
         return vec
 
     def state_to_vector_new(self, state):
+        # Legacy PPO/BC observation encoder.
+        # Keep this only for archived code paths under legacy/ppo_bc.
+        warnings.warn(
+            "AzulGame.state_to_vector_new() is deprecated and kept only for legacy PPO/BC code. "
+            "Do not use it for the current transformer/MCTS mainline.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         features = []
         # 1. 工厂：5个工厂 * 4个格子 * 6(one-hot) = 120个数字（原来是20个）
         for factory in state['factories']:
@@ -547,17 +578,76 @@ class AzulGame:
         new_game.players = [p.clone_for_search() for p in self.players]
         return new_game
 
+    def get_completed_row_count(self, player_idx):
+        return self.players[player_idx].completed_row_count()
+
+    def get_final_standings(self):
+        standings = []
+        for player_idx, player in enumerate(self.players):
+            standings.append({
+                "player_idx": player_idx,
+                "score": player.look_score(),
+                "completed_rows": player.completed_row_count(),
+            })
+
+        standings.sort(
+            key=lambda row: (row["score"], row["completed_rows"]),
+            reverse=True,
+        )
+        return standings
+
+    def get_winners(self):
+        standings = self.get_final_standings()
+        if not standings:
+            return []
+
+        top_score = standings[0]["score"]
+        top_completed_rows = standings[0]["completed_rows"]
+        return [
+            row["player_idx"]
+            for row in standings
+            if row["score"] == top_score and row["completed_rows"] == top_completed_rows
+        ]
+
+    def get_rank_based_value_vector(self):
+        standings = self.get_final_standings()
+        if not standings:
+            return []
+
+        if self.num_players <= 1:
+            return [0.0]
+
+        slot_values = [
+            1.0 - 2.0 * slot_idx / (self.num_players - 1)
+            for slot_idx in range(self.num_players)
+        ]
+        values_by_player = [0.0] * self.num_players
+
+        slot_start = 0
+        while slot_start < len(standings):
+            slot_end = slot_start + 1
+            while (
+                slot_end < len(standings)
+                and standings[slot_end]["score"] == standings[slot_start]["score"]
+                and standings[slot_end]["completed_rows"] == standings[slot_start]["completed_rows"]
+            ):
+                slot_end += 1
+
+            tied_slot_values = slot_values[slot_start:slot_end]
+            tied_value = sum(tied_slot_values) / len(tied_slot_values)
+            for row in standings[slot_start:slot_end]:
+                values_by_player[row["player_idx"]] = tied_value
+
+            slot_start = slot_end
+
+        return values_by_player
+
     # 二人局专用
     def get_game_result(self):
-        score0 = self.players[0].look_score()
-        score1 = self.players[1].look_score()
-
-        if score0 > score1:
-            return 0
-        elif score1 > score0:
-            return 1
-        else:
-            return -1
+        winners = self.get_winners()
+        if len(winners) == 1:
+            return winners[0]
+        return -1
 
 
 class PublicBoard:
@@ -999,9 +1089,14 @@ class PlayerBoard:
         new_playerboard.pattern_lines = [line[:] for line in self.pattern_lines]
         return new_playerboard
 
+    def completed_row_count(self):
+        return sum(1 for row in self.wall if all(row))
+
     def look_score(self):
         return self.score
+
 
 if __name__ == "__main__":
     game = AzulGame()
     game.analyze_moves()
+

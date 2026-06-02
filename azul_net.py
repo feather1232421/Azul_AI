@@ -1,9 +1,11 @@
 import torch
 import torch.nn as nn
 
+from config import ACTION_DIM, TRANSFORMER_OBS_DIM, VALUE_VECTOR_DIM
+
 
 class AzulNet(nn.Module):
-    def __init__(self, obs_dim=567, action_dim=180):
+    def __init__(self, obs_dim=TRANSFORMER_OBS_DIM, action_dim=ACTION_DIM):
         super().__init__()
         self.trunk = nn.Sequential(
             nn.Linear(obs_dim, 512),
@@ -15,11 +17,11 @@ class AzulNet(nn.Module):
         self.value_head = nn.Sequential(
             nn.Linear(256, 64),
             nn.ReLU(),
-            nn.Linear(64, 1)
+            nn.Linear(64, VALUE_VECTOR_DIM)
         )
 
     def forward(self, x):
         feat = self.trunk(x)
         policy_logits = self.policy_head(feat)          # [B, 180]
-        value_logit = self.value_head(feat).squeeze(-1) # [B]
+        value_logit = self.value_head(feat) # [B, VALUE_VECTOR_DIM]
         return policy_logits, value_logit

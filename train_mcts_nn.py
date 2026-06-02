@@ -9,14 +9,131 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from config import ACTION_DIM, MAX_PLAYERS, TRANSFORMER_OBS_DIM
 from dataset import AzulMCTSDataset
 from model_utils import (
     build_checkpoint_payload,
     build_model,
     infer_model_type_from_checkpoint,
     load_checkpoint,
+    load_state_dict_partial,
     unwrap_checkpoint_state_dict,
 )
+
+
+LEGACY_OBS_DIM = 567
+
+
+def convert_legacy_obs_to_current_2p(obs):
+    obs = np.asarray(obs, dtype=np.float32)
+    if obs.shape != (LEGACY_OBS_DIM,):
+        raise ValueError(f"Expected legacy obs shape {(LEGACY_OBS_DIM,)}, got {obs.shape}")
+
+    new_obs = np.zeros(TRANSFORMER_OBS_DIM, dtype=np.float32)
+
+    # factories: old 5 factories -> new 9 factories (pad remaining 4 factories with zeros)
+    new_obs[0:120] = obs[0:120]
+    # center
+    new_obs[216:222] = obs[120:126]
+
+    me_score = float(obs[343])
+    opp_score = float(obs[561])
+    me_first = float(obs[562])
+    opp_first = float(obs[563])
+    opp_delta_vs_me = -float(obs[566])
+
+    ptr = 222
+
+    # me block
+    new_obs[ptr + 0] = 1.0
+    new_obs[ptr + 1] = me_score
+    new_obs[ptr + 2] = 0.0
+    new_obs[ptr + 3] = me_first
+    ptr += 4
+    new_obs[ptr:ptr + 25] = obs[126:151]
+    ptr += 25
+    new_obs[ptr:ptr + 150] = obs[151:301]
+    ptr += 150
+    new_obs[ptr:ptr + 42] = obs[301:343]
+    ptr += 42
+
+    # opponent block
+    new_obs[ptr + 0] = 1.0
+    new_obs[ptr + 1] = opp_score
+    new_obs[ptr + 2] = opp_delta_vs_me
+    new_obs[ptr + 3] = opp_first
+    ptr += 4
+    new_obs[ptr:ptr + 25] = obs[344:369]
+    ptr += 25
+    new_obs[ptr:ptr + 150] = obs[369:519]
+    ptr += 150
+    new_obs[ptr:ptr + 42] = obs[519:561]
+    ptr += 42
+
+    # two padded player slots remain zero-filled
+    ptr += 2 * (4 + 25 + 150 + 42)
+
+    # global features
+    new_obs[ptr + 0] = 2.0 / MAX_PLAYERS
+    new_obs[ptr + 1] = 5.0 / 9.0
+
+    return new_obs
+
+
+def normalize_sample_format(sample):
+    if len(sample) == 5:
+        obs, pi, z, value_mask, mask = sample
+        return (
+            np.asarray(obs, dtype=np.float32),
+            np.asarray(pi, dtype=np.float32),
+            np.asarray(z, dtype=np.float32),
+            np.asarray(value_mask, dtype=np.float32),
+            np.asarray(mask, dtype=np.float32),
+        )
+
+    if len(sample) != 4:
+        raise ValueError(f"Unsupported sample format with len={len(sample)}")
+
+    obs, pi, z, mask = sample
+    obs = np.asarray(obs, dtype=np.float32)
+    if obs.shape == (LEGACY_OBS_DIM,):
+        obs = convert_legacy_obs_to_current_2p(obs)
+    elif obs.shape != (TRANSFORMER_OBS_DIM,):
+        raise ValueError(f"Unsupported obs shape: {obs.shape}")
+
+    z_scalar = float(z)
+    z_vec = np.zeros(MAX_PLAYERS, dtype=np.float32)
+    z_vec[0] = z_scalar
+    z_vec[1] = -z_scalar
+    value_mask = np.zeros(MAX_PLAYERS, dtype=np.float32)
+    value_mask[:2] = 1.0
+    return (
+        obs,
+        np.asarray(pi, dtype=np.float32),
+        z_vec,
+        value_mask,
+        np.asarray(mask, dtype=np.float32),
+    )
+
+
+def normalize_loaded_data(raw_data):
+    if not raw_data:
+        return raw_data
+
+    first = raw_data[0]
+    is_episode_grouped = (
+        isinstance(first, (list, tuple))
+        and len(first) > 0
+        and isinstance(first[0], (list, tuple))
+    )
+
+    if is_episode_grouped:
+        return [
+            [normalize_sample_format(sample) for sample in episode]
+            for episode in raw_data
+        ]
+
+    return [normalize_sample_format(sample) for sample in raw_data]
 
 
 def load_raw_data(data_path=None, data_paths=None):
@@ -33,7 +150,7 @@ def load_raw_data(data_path=None, data_paths=None):
     for path in paths:
         with path.open("rb") as f:
             raw_data = pickle.load(f)
-        merged_raw_data.extend(raw_data)
+        merged_raw_data.extend(normalize_loaded_data(raw_data))
 
     return merged_raw_data, paths
 
@@ -48,10 +165,11 @@ def evaluate(model, loader, device, value_loss_weight=1.0, loser_policy_weight=1
     total_top1_match = 0
     total_samples = 0
 
-    for obs, pi, z, mask in loader:
+    for obs, pi, z, value_mask, mask in loader:
         obs = obs.to(device)
         pi = pi.to(device)
         z = z.to(device)
+        value_mask = value_mask.to(device)
         mask = mask.to(device)
 
         policy_logits, value_logit = model(obs)
@@ -60,13 +178,15 @@ def evaluate(model, loader, device, value_loss_weight=1.0, loser_policy_weight=1
         masked_logits = policy_logits.masked_fill(mask == 0, -1e9)
         log_probs = torch.log_softmax(masked_logits, dim=-1)
         per_sample_policy_loss = -(pi * log_probs).sum(dim=-1)
+        policy_target_scalar = z[:, 0]
         policy_weights = torch.where(
-            z < 0,
-            torch.full_like(z, loser_policy_weight),
-            torch.ones_like(z),
+            policy_target_scalar < 0,
+            torch.full_like(policy_target_scalar, loser_policy_weight),
+            torch.ones_like(policy_target_scalar),
         )
         policy_loss = (per_sample_policy_loss * policy_weights).sum() / policy_weights.sum().clamp_min(1e-8)
-        value_loss = F.mse_loss(value_pred, z)
+        value_sq_error = (value_pred - z) ** 2
+        value_loss = (value_sq_error * value_mask).sum() / value_mask.sum().clamp_min(1e-8)
         loss = policy_loss + value_loss_weight * value_loss
 
         total_loss += loss.item() * obs.size(0)
@@ -94,7 +214,7 @@ def split_loaded_data(raw_data, train_ratio=0.9, seed=42):
         isinstance(first, (list, tuple))
         and len(first) > 0
         and isinstance(first[0], (list, tuple))
-        and len(first[0]) == 4
+        and len(first[0]) == 5
     )
 
     rng = random.Random(seed)
@@ -163,7 +283,7 @@ def train(
             "Regenerate replay data with by_episode=True."
         )
 
-    print("Loaded replay files:")
+    print("Loaded data files:")
     for path in loaded_paths:
         print(f" - {path}")
     print(f"Loaded top-level entries: {len(raw_data)}")
@@ -199,8 +319,9 @@ def train(
         num_workers=0,
     )
 
-    model = build_model(model_type=model_type, obs_dim=567, action_dim=180).to(device)
+    model = build_model(model_type=model_type, obs_dim=TRANSFORMER_OBS_DIM, action_dim=ACTION_DIM).to(device)
     save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     last_save_path = save_path.with_name(f"{save_path.stem}_last{save_path.suffix}")
 
     optimizer = torch.optim.AdamW(
@@ -223,10 +344,17 @@ def train(
                 )
             else:
                 state_dict = unwrap_checkpoint_state_dict(ckpt)
-                model.load_state_dict(state_dict)
+                partial_info = load_state_dict_partial(model, state_dict)
                 start_epoch = 1
                 best_val_loss = float("inf")
-                print("Loaded resume weights only.")
+                print(
+                    "Loaded resume weights only with partial compatibility:",
+                    {
+                        "loaded": len(partial_info["loaded_keys"]),
+                        "skipped": len(partial_info["skipped"]),
+                        "missing": len(partial_info["missing"]),
+                    },
+                )
         elif isinstance(ckpt, dict) and "model" in ckpt:
             if resume_model_type != model_type:
                 raise ValueError(
@@ -262,10 +390,11 @@ def train(
         total_top1_match = 0
         total_samples = 0
 
-        for obs, pi, z, mask in tqdm(train_loader, desc=f"Epoch {epoch}"):
+        for obs, pi, z, value_mask, mask in tqdm(train_loader, desc=f"Epoch {epoch}"):
             obs = obs.to(device)
             pi = pi.to(device)
             z = z.to(device)
+            value_mask = value_mask.to(device)
             mask = mask.to(device)
 
             policy_logits, value_logit = model(obs)
@@ -274,13 +403,15 @@ def train(
 
             log_probs = torch.log_softmax(masked_logits, dim=-1)
             per_sample_policy_loss = -(pi * log_probs).sum(dim=-1)
+            policy_target_scalar = z[:, 0]
             policy_weights = torch.where(
-                z < 0,
-                torch.full_like(z, loser_policy_weight),
-                torch.ones_like(z),
+                policy_target_scalar < 0,
+                torch.full_like(policy_target_scalar, loser_policy_weight),
+                torch.ones_like(policy_target_scalar),
             )
             policy_loss = (per_sample_policy_loss * policy_weights).sum() / policy_weights.sum().clamp_min(1e-8)
-            value_loss = F.mse_loss(value_pred, z)
+            value_sq_error = (value_pred - z) ** 2
+            value_loss = (value_sq_error * value_mask).sum() / value_mask.sum().clamp_min(1e-8)
             loss = policy_loss + value_loss_weight * value_loss
 
             optimizer.zero_grad()

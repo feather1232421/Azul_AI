@@ -4,10 +4,11 @@ import torch
 
 from azul_net import AzulNet
 from azul_transformer import AzulTransformer
+from config import ACTION_DIM, TRANSFORMER_OBS_DIM
 
 
-DEFAULT_ACTION_DIM = 180
-DEFAULT_OBS_DIM = 567
+DEFAULT_ACTION_DIM = ACTION_DIM
+DEFAULT_OBS_DIM = TRANSFORMER_OBS_DIM
 
 
 def get_model_kwargs(model_type, action_dim=DEFAULT_ACTION_DIM, obs_dim=DEFAULT_OBS_DIM):
@@ -56,7 +57,38 @@ def load_checkpoint(model_path, device):
     return torch.load(model_path, map_location=device)
 
 
-def load_model(model_path, device, model_type=None, action_dim=DEFAULT_ACTION_DIM, obs_dim=DEFAULT_OBS_DIM):
+def load_state_dict_partial(model, state_dict):
+    model_state = model.state_dict()
+    matched_state = {}
+    skipped = []
+
+    for key, tensor in state_dict.items():
+        if key not in model_state:
+            skipped.append((key, "missing_key"))
+            continue
+        if model_state[key].shape != tensor.shape:
+            skipped.append((key, f"shape_mismatch {tuple(tensor.shape)} -> {tuple(model_state[key].shape)}"))
+            continue
+        matched_state[key] = tensor
+
+    missing = [key for key in model_state.keys() if key not in matched_state]
+    model_state.update(matched_state)
+    model.load_state_dict(model_state)
+    return {
+        "loaded_keys": sorted(matched_state.keys()),
+        "skipped": skipped,
+        "missing": missing,
+    }
+
+
+def load_model(
+    model_path,
+    device,
+    model_type=None,
+    action_dim=DEFAULT_ACTION_DIM,
+    obs_dim=DEFAULT_OBS_DIM,
+    allow_partial_load=False,
+):
     checkpoint = load_checkpoint(model_path, device)
     state_dict = unwrap_checkpoint_state_dict(checkpoint)
     resolved_model_type = model_type or infer_model_type_from_checkpoint(checkpoint)
@@ -65,10 +97,24 @@ def load_model(model_path, device, model_type=None, action_dim=DEFAULT_ACTION_DI
         action_dim=action_dim,
         obs_dim=obs_dim,
     )
-    model.load_state_dict(state_dict)
+
+    partial_load_info = None
+    if allow_partial_load:
+        partial_load_info = load_state_dict_partial(model, state_dict)
+        print(
+            "Partial load summary:",
+            {
+                "loaded": len(partial_load_info["loaded_keys"]),
+                "skipped": len(partial_load_info["skipped"]),
+                "missing": len(partial_load_info["missing"]),
+            },
+        )
+    else:
+        model.load_state_dict(state_dict)
+
     model.to(device)
     model.eval()
-    return model, checkpoint, resolved_model_type
+    return model, checkpoint, resolved_model_type, partial_load_info
 
 
 def build_checkpoint_payload(model, optimizer=None, epoch=None, extra=None):
