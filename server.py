@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import socket
 import struct
 import json
+import gc
 import traceback
 import os
 import sys
@@ -203,6 +204,9 @@ def run_server(host="127.0.0.1", port=9999, agent=None, raw_log_dir=None):
                 print(reply)
 
                 send_message(conn, reply)
+                raw_msg = None
+                reply = None
+                gc.collect()
 
     finally:
         server.close()

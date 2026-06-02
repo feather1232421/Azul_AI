@@ -123,6 +123,22 @@ class MCTSNode:
         return child
 
 
+def release_search_tree(root):
+    if root is None:
+        return
+
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        stack.extend(node.children)
+        node.children = []
+        node.children_actions = {}
+        node.parent = None
+        node.game = None
+        node.untried_actions = []
+        node.priors = None
+
+
 class MCTSAgent:
     def __init__(
         self,
@@ -410,6 +426,7 @@ class MCTSAgent:
             pi = np.zeros(self.action_dim, dtype=np.float32)
             idx = REVERSE_LOOKUP[move]
             pi[idx] = 1.0
+            release_search_tree(root)
             return move, pi, mask
         
         move = max(root.children, key=lambda c: c.visits).action
@@ -421,6 +438,7 @@ class MCTSAgent:
         #     print(
         #         f"action={child.action} visits={child.visits} wins={child.wins:.2f} Q={q:.3f} prior={child.prior:.3f}")
 
+        release_search_tree(root)
         return move, pi, mask
 
     def _build_pi_from_root(self, root):
@@ -462,6 +480,8 @@ class MCTSAgent:
             pi = np.zeros(self.action_dim, dtype=np.float32)
             idx = REVERSE_LOOKUP[move]
             pi[idx] = 1.0
+            for root in roots:
+                release_search_tree(root)
             return move, pi, mask
 
         move = max(total_visits.items(), key=lambda item: item[1])[0]
@@ -475,6 +495,8 @@ class MCTSAgent:
         #     print(
         #         f"action={action} visits={visits} wins={wins:.2f} Q={q:.3f} prior={avg_prior:.3f}")
 
+        for root in roots:
+            release_search_tree(root)
         return move, pi, mask
 
     def decide(self, game):
