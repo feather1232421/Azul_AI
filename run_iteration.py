@@ -240,6 +240,12 @@ def main():
         default=None,
         help="Optional extra dataset pickle paths to append during training. For curated cases, generate them with build_curated_dataset.py --by-episode so they stay compatible with strict episode splits.",
     )
+    parser.add_argument(
+        "--curated-repeat",
+        type=int,
+        default=1,
+        help="Repeat each curated dataset path this many times during training.",
+    )
     parser.add_argument("--allow-promote", action="store_true")
     parser.add_argument("--no-promote", action="store_true")
     args = parser.parse_args()
@@ -321,6 +327,11 @@ def main():
         loser_policy_weight=args.loser_policy_weight,
         strict_episode_split=True,
         model_type=args.model_type,
+        repeat_data_paths=[
+            (path, args.curated_repeat - 1)
+            for path in (args.curated_data_paths or [])
+            if args.curated_repeat > 1
+        ] or None,
     )
 
     promotion_summary = promotion_match(

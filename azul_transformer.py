@@ -5,7 +5,7 @@ from config import VALUE_VECTOR_DIM
 
 
 class AzulTransformer(nn.Module):
-    def __init__(self, d_model=64, nhead=4, num_layers=3, action_dim=180):
+    def __init__(self, d_model=64, nhead=4, num_layers=3, dim_feedforward=512, action_dim=180):
         super().__init__()
         self.num_factory_tokens = 9
         self.num_player_tokens = 4
@@ -25,6 +25,7 @@ class AzulTransformer(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
+            dim_feedforward=dim_feedforward,
             batch_first=True,
             dropout=0.1,
         )

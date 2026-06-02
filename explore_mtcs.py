@@ -64,6 +64,8 @@ class MCTSNode:
         self.children_actions = {}  # 新增：用字典快速检索 {action: child_node}
 
         self.visits = 0
+        # Absolute player-indexed values. Network leaf values are relative to
+        # the leaf player, then converted to absolute order during backprop.
         self.value_sum = np.zeros(MAX_PLAYERS, dtype=np.float32)
         self.game = game  # clone过来的AzulGame实例
         self.parent = parent
@@ -499,11 +501,7 @@ class MCTSAgent:
         current = node
         while current is not None:
             current.visits += 1
-            relative_values = np.asarray(
-                current.game.build_relative_value_vector(current.game.current_player_idx, absolute_values),
-                dtype=np.float32,
-            )
-            current.value_sum += relative_values
+            current.value_sum += absolute_values
             current = current.parent
     # 训练流程
     # NN需要训练数据，来源就是MCTS自对战：

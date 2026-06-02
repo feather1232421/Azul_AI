@@ -136,12 +136,15 @@ def normalize_loaded_data(raw_data):
     return [normalize_sample_format(sample) for sample in raw_data]
 
 
-def load_raw_data(data_path=None, data_paths=None):
+def load_raw_data(data_path=None, data_paths=None, repeat_data_paths=None):
     paths = []
     if data_path is not None:
         paths.append(Path(data_path))
     if data_paths is not None:
         paths.extend(Path(path) for path in data_paths)
+    if repeat_data_paths is not None:
+        for path, repeat in repeat_data_paths:
+            paths.extend([Path(path)] * repeat)
 
     if not paths:
         raise ValueError("At least one data path is required.")
@@ -261,6 +264,7 @@ def train(
     loser_policy_weight=1.0,
     strict_episode_split=False,
     model_type="transformer",
+    repeat_data_paths=None,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -269,7 +273,11 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    raw_data, loaded_paths = load_raw_data(data_path=data_path, data_paths=data_paths)
+    raw_data, loaded_paths = load_raw_data(
+        data_path=data_path,
+        data_paths=data_paths,
+        repeat_data_paths=repeat_data_paths,
+    )
 
     train_samples, val_samples, train_episodes, val_episodes, split_mode = split_loaded_data(
         raw_data,
@@ -506,6 +514,14 @@ if __name__ == "__main__":
     parser.add_argument("--loser-policy-weight", type=float, default=1.0)
     parser.add_argument("--strict-episode-split", action="store_true")
     parser.add_argument("--model-type", choices=["mlp", "transformer"], default="transformer")
+    parser.add_argument(
+        "--repeat-data-path",
+        action="append",
+        nargs=2,
+        metavar=("PATH", "REPEAT"),
+        default=None,
+        help="Append a dataset path multiple times, e.g. --repeat-data-path curated.pkl 30.",
+    )
     args = parser.parse_args()
 
     if args.data_path is None and not args.data_paths:
@@ -527,4 +543,8 @@ if __name__ == "__main__":
         loser_policy_weight=args.loser_policy_weight,
         strict_episode_split=args.strict_episode_split,
         model_type=args.model_type,
+        repeat_data_paths=[
+            (path, int(repeat))
+            for path, repeat in args.repeat_data_path
+        ] if args.repeat_data_path else None,
     )
