@@ -140,7 +140,7 @@ class PPOAgent:
 
     def get_refined_mask(self, game):
         # 初始化全为 False 的 180 维布尔数组
-        mask = np.zeros(180, dtype=bool)
+        mask = np.zeros(ACTION_DIM, dtype=bool)
         legal_moves = game.get_legal_moves()
 
         for move in legal_moves:

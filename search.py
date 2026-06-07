@@ -180,7 +180,7 @@ class AzulSearchAgent:
 
     def evaluate_all_moves_refined(self, game):
         candidate_moves = game.get_search_moves_v2()
-        full_scores = np.full(180, -100.0, dtype=np.float32)  # 默认惩罚分
+        full_scores = np.full(ACTION_DIM, -100.0, dtype=np.float32)  # 默认惩罚分
 
         # 1. 先用 1 步 Greedy 给所有合法动作打个底分
         scored_candidates = []
