@@ -61,13 +61,25 @@ def load_state_dict_partial(model, state_dict):
     model_state = model.state_dict()
     matched_state = {}
     skipped = []
+    expanded = []
 
     for key, tensor in state_dict.items():
         if key not in model_state:
             skipped.append((key, "missing_key"))
             continue
-        if model_state[key].shape != tensor.shape:
-            skipped.append((key, f"shape_mismatch {tuple(tensor.shape)} -> {tuple(model_state[key].shape)}"))
+        target_tensor = model_state[key]
+        if target_tensor.shape != tensor.shape:
+            if tensor.ndim == target_tensor.ndim and all(
+                source_dim <= target_dim
+                for source_dim, target_dim in zip(tensor.shape, target_tensor.shape)
+            ):
+                merged = target_tensor.clone()
+                slices = tuple(slice(0, dim) for dim in tensor.shape)
+                merged[slices] = tensor
+                matched_state[key] = merged
+                expanded.append((key, f"prefix_copy {tuple(tensor.shape)} -> {tuple(target_tensor.shape)}"))
+                continue
+            skipped.append((key, f"shape_mismatch {tuple(tensor.shape)} -> {tuple(target_tensor.shape)}"))
             continue
         matched_state[key] = tensor
 
@@ -76,6 +88,7 @@ def load_state_dict_partial(model, state_dict):
     model.load_state_dict(model_state)
     return {
         "loaded_keys": sorted(matched_state.keys()),
+        "expanded": expanded,
         "skipped": skipped,
         "missing": missing,
     }

@@ -229,6 +229,8 @@ if __name__ == "__main__":
     parser.add_argument("--puct-c", type=float, default=1.0)
     parser.add_argument("--prior-temperature", type=float, default=1.0)
     parser.add_argument("--raw-log-dir", type=str, default=None)
+    parser.add_argument("--no-policy", action="store_true")
+    parser.add_argument("--no-value", action="store_true")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -246,8 +248,8 @@ if __name__ == "__main__":
         my_player_idx=0,
         net=net,
         device=device,
-        use_policy=True,
-        use_value=True,
+        use_policy=not args.no_policy,
+        use_value=not args.no_value,
         puct_c=args.puct_c,
         prior_temperature=args.prior_temperature,
     )
