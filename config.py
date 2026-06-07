@@ -25,7 +25,7 @@ BAG_INITIAL_COUNT = 20  # 每种颜色20块
 
 # 生成所有可能的组合 (6个来源 x 5个颜色 x 6个目标行)
 ACTION_LOOKUP = []
-for src in ["center", 0, 1, 2, 3, 4]:
+for src in ["center", 0, 1, 2, 3, 4, 5, 6, 7, 8]:
     for col in range(1, 6):  # 颜色 1-5
         for row in range(0, 6):  # 行 0-4 是墙，5 是地板
             ACTION_LOOKUP.append((src, col, row))
@@ -74,7 +74,7 @@ def color_to_column(row_idx, color):
 # 4 player slots * (meta 4 + wall 25 + patterns 150 + floor 42) = 884
 # global meta = 2
 TRANSFORMER_OBS_DIM = 1108
-ACTION_DIM = 180
+ACTION_DIM = len(ACTION_LOOKUP)
 VALUE_VECTOR_DIM = MAX_PLAYERS
 
 

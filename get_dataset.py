@@ -1,5 +1,6 @@
 import argparse
 import pickle
+import random
 
 import numpy as np
 import torch
@@ -17,6 +18,8 @@ DEFAULT_TEMPERATURE_SCHEDULE = (
     (24, 0.35),
     (40, 0.15),
 )
+
+DEFAULT_PLAYER_MIX = "2:1.0"
 
 
 def build_action_mask(game):
@@ -42,6 +45,42 @@ def parse_temperature_schedule(text):
         schedule.append((int(start_text.strip()), float(temp_text.strip())))
     schedule.sort(key=lambda item: item[0])
     return schedule
+
+
+def parse_player_mix(text):
+    if not text:
+        text = DEFAULT_PLAYER_MIX
+
+    weights = []
+    total = 0.0
+    for item in text.split(","):
+        players_text, weight_text = item.split(":")
+        players = int(players_text.strip())
+        weight = float(weight_text.strip())
+        if players not in {2, 3, 4}:
+            raise ValueError(f"Unsupported player count in mix: {players}")
+        if weight < 0:
+            raise ValueError(f"Player mix weight must be non-negative: {item}")
+        if weight == 0:
+            continue
+        weights.append((players, weight))
+        total += weight
+
+    if total <= 0:
+        raise ValueError("Player mix must contain at least one positive weight.")
+
+    return [(players, weight / total) for players, weight in weights]
+
+
+def sample_player_count(player_mix, rng=None):
+    rng = rng or random
+    roll = rng.random()
+    cumulative = 0.0
+    for players, probability in player_mix:
+        cumulative += probability
+        if roll <= cumulative:
+            return players
+    return player_mix[-1][0]
 
 
 def get_temperature_for_step(step_idx, temperature_schedule):
@@ -99,8 +138,10 @@ def finalize_episode(game, episode, values_by_player):
     return labeled_episode
 
 
-def play_episode(agents_by_player, temperature_schedule=None):
-    game = AzulGame()
+def play_episode(agents_by_player, temperature_schedule=None, num_players=None):
+    if num_players is None:
+        num_players = max(agents_by_player.keys()) + 1
+    game = AzulGame(num_players=num_players)
     game.reset()
     episode = []
     step_idx = 0
@@ -137,10 +178,16 @@ def play_episode(agents_by_player, temperature_schedule=None):
 def collect_data_from_matchups(matchups, by_episode=True, temperature_schedule=None):
     data = []
 
-    for agents_by_player in tqdm(matchups, desc="Collecting self-play data"):
+    for matchup in tqdm(matchups, desc="Collecting self-play data"):
+        if isinstance(matchup, tuple):
+            agents_by_player, num_players = matchup
+        else:
+            agents_by_player = matchup
+            num_players = None
         labeled_episode = play_episode(
             agents_by_player,
             temperature_schedule=temperature_schedule,
+            num_players=num_players,
         )
         if by_episode:
             data.append(labeled_episode)
@@ -150,8 +197,13 @@ def collect_data_from_matchups(matchups, by_episode=True, temperature_schedule=N
     return data
 
 
-def collect_data(agent, games=100, by_episode=True, temperature_schedule=None):
-    matchups = [{0: agent, 1: agent} for _ in range(games)]
+def collect_data(agent, games=100, by_episode=True, temperature_schedule=None, player_mix=None, seed=None):
+    rng = random.Random(seed)
+    player_mix = parse_player_mix(player_mix or DEFAULT_PLAYER_MIX)
+    matchups = []
+    for _ in range(games):
+        num_players = sample_player_count(player_mix, rng)
+        matchups.append(({seat: agent for seat in range(num_players)}, num_players))
     return collect_data_from_matchups(
         matchups,
         by_episode=by_episode,
@@ -159,12 +211,14 @@ def collect_data(agent, games=100, by_episode=True, temperature_schedule=None):
     )
 
 
-def collect_greedy_data(games=100, agent=None, by_episode=True):
+def collect_greedy_data(games=100, agent=None, by_episode=True, player_mix=None, seed=None):
     data = []
     agent = agent or GreedyAgent()
+    rng = random.Random(seed)
+    player_mix = parse_player_mix(player_mix or DEFAULT_PLAYER_MIX)
 
     for _ in tqdm(range(games), desc="Collecting greedy teacher data"):
-        game = AzulGame()
+        game = AzulGame(num_players=sample_player_count(player_mix, rng))
         game.reset()
         episode = []
 
@@ -221,11 +275,23 @@ if __name__ == "__main__":
     parser.add_argument("--dirichlet-alpha", type=float, default=0.3)
     parser.add_argument("--root-exploration-fraction", type=float, default=0.25)
     parser.add_argument("--flat", action="store_true")
+    parser.add_argument(
+        "--player-mix",
+        type=str,
+        default=DEFAULT_PLAYER_MIX,
+        help="Comma-separated players:weight mix for self-play games, e.g. 2:0.8,3:0.1,4:0.1.",
+    )
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     temperature_schedule = parse_temperature_schedule(args.temperature_schedule)
 
     if args.mode == "greedy":
-        dataset = collect_greedy_data(games=args.games, by_episode=not args.flat)
+        dataset = collect_greedy_data(
+            games=args.games,
+            by_episode=not args.flat,
+            player_mix=args.player_mix,
+            seed=args.seed,
+        )
         output_path = args.output or "greedy_teacher_dataset.pkl"
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -256,6 +322,8 @@ if __name__ == "__main__":
             games=args.games,
             by_episode=not args.flat,
             temperature_schedule=temperature_schedule,
+            player_mix=args.player_mix,
+            seed=args.seed,
         )
         output_path = args.output or "MCTS_nn_dataset_pi_t15_c10.pkl"
 

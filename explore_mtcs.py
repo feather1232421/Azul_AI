@@ -381,7 +381,7 @@ class MCTSAgent:
 
     def _search(self, game):
         legal = game.get_legal_moves()
-        mask = np.zeros(180, dtype=np.float32)
+        mask = np.zeros(self.action_dim, dtype=np.float32)
         for move in legal:
             idx = REVERSE_LOOKUP[move]
             mask[idx] = 1.0

@@ -22,6 +22,7 @@ from model_utils import (
 
 
 LEGACY_OBS_DIM = 567
+LEGACY_ACTION_DIM = 180
 
 
 def convert_legacy_obs_to_current_2p(obs):
@@ -80,15 +81,26 @@ def convert_legacy_obs_to_current_2p(obs):
     return new_obs
 
 
+def normalize_policy_vector(values, label):
+    values = np.asarray(values, dtype=np.float32)
+    if values.shape == (ACTION_DIM,):
+        return values
+    if values.shape == (LEGACY_ACTION_DIM,):
+        padded = np.zeros(ACTION_DIM, dtype=np.float32)
+        padded[:LEGACY_ACTION_DIM] = values
+        return padded
+    raise ValueError(f"Unsupported {label} shape: {values.shape}")
+
+
 def normalize_sample_format(sample):
     if len(sample) == 5:
         obs, pi, z, value_mask, mask = sample
         return (
             np.asarray(obs, dtype=np.float32),
-            np.asarray(pi, dtype=np.float32),
+            normalize_policy_vector(pi, "pi"),
             np.asarray(z, dtype=np.float32),
             np.asarray(value_mask, dtype=np.float32),
-            np.asarray(mask, dtype=np.float32),
+            normalize_policy_vector(mask, "mask"),
         )
 
     if len(sample) != 4:
@@ -109,10 +121,10 @@ def normalize_sample_format(sample):
     value_mask[:2] = 1.0
     return (
         obs,
-        np.asarray(pi, dtype=np.float32),
+        normalize_policy_vector(pi, "pi"),
         z_vec,
         value_mask,
-        np.asarray(mask, dtype=np.float32),
+        normalize_policy_vector(mask, "mask"),
     )
 
 

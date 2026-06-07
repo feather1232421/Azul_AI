@@ -1,4 +1,4 @@
-from config import MAX_PLAYERS, REVERSE_LOOKUP
+from config import ACTION_DIM, MAX_PLAYERS, REVERSE_LOOKUP
 from logic import AzulGame
 from reconstruction_test import TableData
 import numpy as np
@@ -216,7 +216,7 @@ def build_game_from_case(case):
 
 
 def build_policy_target(best_move, legal_moves, best_prob=1.0):
-    pi = np.zeros(180, dtype=np.float32)
+    pi = np.zeros(ACTION_DIM, dtype=np.float32)
     if best_prob >= 1.0 or len(legal_moves) <= 1:
         pi[REVERSE_LOOKUP[best_move]] = 1.0
         return pi
@@ -229,7 +229,7 @@ def build_policy_target(best_move, legal_moves, best_prob=1.0):
 
 
 def build_mask(legal_moves):
-    mask = np.zeros(180, dtype=np.float32)
+    mask = np.zeros(ACTION_DIM, dtype=np.float32)
     for move in legal_moves:
         mask[REVERSE_LOOKUP[move]] = 1.0
     return mask

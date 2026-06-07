@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 
-from config import VALUE_VECTOR_DIM
+from config import ACTION_DIM, VALUE_VECTOR_DIM
 
 
 class AzulTransformer(nn.Module):
-    def __init__(self, d_model=64, nhead=4, num_layers=3, dim_feedforward=512, action_dim=180):
+    def __init__(self, d_model=64, nhead=4, num_layers=3, dim_feedforward=512, action_dim=ACTION_DIM):
         super().__init__()
         self.num_factory_tokens = 9
         self.num_player_tokens = 4

@@ -13,7 +13,12 @@ import torch
 from config import ACTION_DIM, TRANSFORMER_OBS_DIM
 from battle import promotion_match
 from explore_mtcs import MCTSAgent
-from get_dataset import collect_data, collect_data_from_matchups, parse_temperature_schedule
+from get_dataset import (
+    collect_data_from_matchups,
+    parse_player_mix,
+    parse_temperature_schedule,
+    sample_player_count,
+)
 from model_utils import load_model
 from train_mcts_nn import train
 
@@ -70,6 +75,7 @@ def collect_self_play(
     dirichlet_alpha,
     root_exploration_fraction,
     temperature_schedule,
+    player_mix,
     selfplay_opponent_pool_size,
     seed,
 ):
@@ -105,43 +111,38 @@ def collect_self_play(
     champion_agent = get_agent(champion_path)
     rng = random.Random(seed)
     seat_counts = Counter()
+    player_count_counts = Counter()
     opponent_counts = Counter()
     matchups = []
+    player_mix = parse_player_mix(player_mix)
     for _ in range(games):
-        opponent_path = Path(rng.choice(opponent_pool))
-        champion_seat = rng.randint(0, 1)
-        opponent_seat = 1 - champion_seat
+        num_players = sample_player_count(player_mix, rng)
+        champion_seat = rng.randint(0, num_players - 1)
+        agents_by_player = {champion_seat: champion_agent}
         seat_counts[champion_seat] += 1
-        opponent_counts[opponent_path.name] += 1
-        matchups.append({
-            champion_seat: champion_agent,
-            opponent_seat: get_agent(opponent_path),
-        })
+        player_count_counts[num_players] += 1
+        for seat in range(num_players):
+            if seat == champion_seat:
+                continue
+            opponent_path = Path(rng.choice(opponent_pool))
+            opponent_counts[opponent_path.name] += 1
+            agents_by_player[seat] = get_agent(opponent_path)
+        matchups.append((agents_by_player, num_players))
 
     print("Self-play opponent sample counts:")
     for opponent_name, count in sorted(opponent_counts.items()):
         print(f" - {opponent_name}: {count}")
     print(
         "Champion seat counts:",
-        {
-            "seat_0": seat_counts.get(0, 0),
-            "seat_1": seat_counts.get(1, 0),
-        },
+        {f"seat_{seat}": seat_counts.get(seat, 0) for seat in range(4)},
     )
+    print("Player count sample counts:", dict(sorted(player_count_counts.items())))
 
-    if archive_paths:
-        dataset = collect_data_from_matchups(
-            matchups,
-            by_episode=True,
-            temperature_schedule=temperature_schedule,
-        )
-    else:
-        dataset = collect_data(
-            champion_agent,
-            games=games,
-            by_episode=True,
-            temperature_schedule=temperature_schedule,
-        )
+    dataset = collect_data_from_matchups(
+        matchups,
+        by_episode=True,
+        temperature_schedule=temperature_schedule,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("wb") as f:
@@ -156,6 +157,8 @@ def collect_self_play(
         "samples": sample_count,
         "opponent_pool": [str(path) for path in opponent_pool],
         "temperature_schedule": temperature_schedule,
+        "player_mix": player_mix,
+        "player_count_counts": dict(player_count_counts),
     }
 
 
@@ -231,6 +234,12 @@ def main():
         type=str,
         default="0:1.25,12:0.8,24:0.35,40:0.15",
     )
+    parser.add_argument(
+        "--player-mix",
+        type=str,
+        default="2:1.0",
+        help="Comma-separated players:weight mix for self-play games. Default keeps training pure 2P; try 2:0.8,3:0.1,4:0.1 after 2P is stable.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--model-type", choices=["mlp", "transformer"], default="transformer")
     parser.add_argument(
@@ -280,6 +289,7 @@ def main():
         dirichlet_alpha=args.dirichlet_alpha,
         root_exploration_fraction=args.root_exploration_fraction,
         temperature_schedule=temperature_schedule,
+        player_mix=args.player_mix,
         selfplay_opponent_pool_size=args.selfplay_opponent_pool_size,
         seed=args.seed,
     )
@@ -297,6 +307,8 @@ def main():
             "selfplay_sims": args.selfplay_sims,
             "selfplay_worlds": args.selfplay_worlds,
             "temperature_schedule": self_play_summary["temperature_schedule"],
+            "player_mix": self_play_summary["player_mix"],
+            "player_count_counts": self_play_summary["player_count_counts"],
             "opponent_pool": self_play_summary["opponent_pool"],
         },
     )
