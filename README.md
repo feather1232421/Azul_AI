@@ -17,7 +17,8 @@
   - 基于 PyTorch 实现的双头神经网络 (Policy Head / Value Head) 深度学习模型及训练。
 - **UI & Client**: 负责游戏运行逻辑、表现层、用户交互及真人对战功能。
   - 开发者: [@PXbask](https://github.com/PXbask)
-  - 客户端仓库: https://github.com/PXbask/AZUL
+  - 旧客户端仓库: https://github.com/PXbask/AZUL
+  - 新客户端仓库https://github.com/PXbask/AZUL_R
   
 ## 🚀 开发进度
 - [x] **基础建设**
