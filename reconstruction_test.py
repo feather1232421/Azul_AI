@@ -3,7 +3,7 @@ from config import *
 import numpy as np
 import json
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 
 class TokenNumberData(BaseModel):
@@ -18,12 +18,15 @@ class PlaceTokenAreaData(BaseModel):
 
 class PlayerBoardData(BaseModel):
     score: int
+    seatId: Optional[int] = None
+    clientId: Optional[int] = None
     manualAreas: List[List[PlaceTokenAreaData]]
     coloredAreas: List[List[PlaceTokenAreaData]]
     loseAreas: List[PlaceTokenAreaData]
 
 
 class TableData(BaseModel):
+    totalPlayerCount: Optional[int] = None
     factories: List[List[PlaceTokenAreaData]]
     center: List[PlaceTokenAreaData]
     me: PlayerBoardData

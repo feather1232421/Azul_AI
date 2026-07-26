@@ -13,14 +13,16 @@ from pathlib import Path
 from explore_mtcs import MCTSAgent
 from ai import GreedyAgent
 import torch
-from config import ACTION_DIM, TRANSFORMER_OBS_DIM
+from config import ACTION_DIM, PLAYER_FACTORY_MAP, TRANSFORMER_OBS_DIM
 from model_utils import load_model
 
 
-class AIAction(BaseModel):
-    sourceId: int
-    color: int
-    destinationId: int
+class PlayerActionData(BaseModel):
+    ClientId: int
+    SeatId: int
+    FactoryId: int
+    ColorType: int
+    Row: int
 
 
 def resource_dir() -> str:
@@ -88,7 +90,7 @@ def append_raw_log(raw_log_path, raw_msg: str, reply: str, error: str = None):
 # 2. move → Unity Action
 # =========================
 
-def convert_move_to_action(move):
+def convert_move_to_action(move, client_id, seat_id):
     """
     move: (source, color, destination)
     """
@@ -107,18 +109,65 @@ def convert_move_to_action(move):
     else:
         destination_id = int(destination)
 
-    return {
-        "sourceId": source_id,
-        "color": int(color),
-        "destinationId": destination_id,
-    }
+    return PlayerActionData(
+        ClientId=int(client_id),
+        SeatId=int(seat_id),
+        FactoryId=source_id,
+        ColorType=int(color),
+        Row=destination_id,
+    )
+
+
+def validate_online_table_data(table_data):
+    if table_data.totalPlayerCount is None:
+        raise ValueError("totalPlayerCount is required")
+    if table_data.me.seatId is None:
+        raise ValueError("me.seatId is required")
+    if table_data.me.clientId is None:
+        raise ValueError("me.clientId is required")
+
+    player_count = table_data.totalPlayerCount
+    if player_count not in PLAYER_FACTORY_MAP:
+        raise ValueError(f"totalPlayerCount must be 2, 3, or 4, got {player_count}")
+    if len(table_data.opponents) != player_count - 1:
+        raise ValueError(
+            "totalPlayerCount does not match me + opponents: "
+            f"{player_count} != {1 + len(table_data.opponents)}"
+        )
+
+    expected_factories = PLAYER_FACTORY_MAP[player_count]
+    if len(table_data.factories) != expected_factories:
+        raise ValueError(
+            f"{player_count}P requires {expected_factories} factories, "
+            f"got {len(table_data.factories)}"
+        )
+    for factory_idx, factory in enumerate(table_data.factories):
+        if len(factory) != 4:
+            raise ValueError(
+                f"factory {factory_idx} must contain 4 areas, got {len(factory)}"
+            )
+
+    players = [table_data.me, *table_data.opponents]
+    seat_ids = [player.seatId for player in players]
+    if any(seat_id is None for seat_id in seat_ids):
+        raise ValueError("every player must include seatId")
+    if len(set(seat_ids)) != len(seat_ids):
+        raise ValueError(f"seatId values must be unique, got {seat_ids}")
+
+
+def action_to_json(action):
+    if hasattr(action, "model_dump"):
+        payload = action.model_dump()
+    else:
+        payload = action.dict()
+    return json.dumps(payload, ensure_ascii=False)
 
 
 # =========================
 # 3. 选择动作
 # =========================
 
-def choose_move(game,agent=None):
+def choose_move(game, client_id, seat_id, agent=None):
     if agent is None:
         agent = GreedyAgent()
     legal_moves = game.get_legal_moves()
@@ -131,7 +180,7 @@ def choose_move(game,agent=None):
 
     print("chosen move:", move)
 
-    action = convert_move_to_action(move)
+    action = convert_move_to_action(move, client_id=client_id, seat_id=seat_id)
 
     print("converted action:", action)
 
@@ -144,14 +193,26 @@ def choose_move(game,agent=None):
 
 def handle_obs_message(raw_msg: str, agent=None, raw_log_path=None) -> str:
 
+    request_client_id = -1
+    request_seat_id = -1
     try:
         data = json.loads(raw_msg)
+        me_data = data.get("me") if isinstance(data, dict) else None
+        if isinstance(me_data, dict):
+            request_client_id = me_data.get("clientId", -1)
+            request_seat_id = me_data.get("seatId", -1)
 
         table_data = TableData(**data)
+        validate_online_table_data(table_data)
         game = AzulGame.from_table_data(table_data)
         game.display_all_info()
-        action = choose_move(game, agent)
-        reply = json.dumps(action, ensure_ascii=False)
+        action = choose_move(
+            game,
+            client_id=table_data.me.clientId,
+            seat_id=table_data.me.seatId,
+            agent=agent,
+        )
+        reply = action_to_json(action)
         append_raw_log(raw_log_path, raw_msg, reply)
         return reply
 
@@ -159,11 +220,13 @@ def handle_obs_message(raw_msg: str, agent=None, raw_log_path=None) -> str:
         traceback.print_exc()
 
         # 出错也要返回一个合法结构，防止 Unity 崩
-        reply = json.dumps({
-            "sourceId": -1,
-            "color": 0,
-            "destinationId": -1
-        })
+        reply = action_to_json(PlayerActionData(
+            ClientId=request_client_id,
+            SeatId=request_seat_id,
+            FactoryId=-1,
+            ColorType=0,
+            Row=-1,
+        ))
         append_raw_log(raw_log_path, raw_msg, reply, error=repr(e))
         return reply
 

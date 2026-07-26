@@ -541,7 +541,10 @@ class AzulGame:
 
     @classmethod
     def from_table_data(cls, table_data):
-        game = cls(num_players=1 + len(table_data.opponents), auto_init=False)
+        player_count = table_data.totalPlayerCount
+        if player_count is None:
+            player_count = 1 + len(table_data.opponents)
+        game = cls(num_players=player_count, auto_init=False)
         game.load_from_table_data(table_data)
         return game
 
@@ -549,7 +552,9 @@ class AzulGame:
         self.current_player_idx = 0
         self.first_player = self.current_player_idx
         self.next_round_first_player = None
-        self.num_players = 1 + len(table_data.opponents)
+        self.num_players = table_data.totalPlayerCount
+        if self.num_players is None:
+            self.num_players = 1 + len(table_data.opponents)
         # 这里先只重建基础对象壳子
         self.public_board = PublicBoard(self.num_players)
         self.players = [PlayerBoard(i) for i in range(self.num_players)]
@@ -789,14 +794,13 @@ class PublicBoard:
 
     def _load_center(self, center):
         self.center = []
-        for i in range(24):
-            if center[i].empty:
+        for area in center:
+            if area.empty:
                 continue
+            if area.color == 0:
+                self.center.append(FIRST_PLAYER)
             else:
-                if center[i].color == 0:
-                    self.center.append(FIRST_PLAYER)
-                else:
-                    self.center.append(center[i].color)
+                self.center.append(area.color)
 
     def _load_discard(self, discard_tokens):
         self.discard_pile = []
