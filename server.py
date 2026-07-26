@@ -205,7 +205,6 @@ def handle_obs_message(raw_msg: str, agent=None, raw_log_path=None) -> str:
         table_data = TableData(**data)
         validate_online_table_data(table_data)
         game = AzulGame.from_table_data(table_data)
-        game.display_all_info()
         action = choose_move(
             game,
             client_id=table_data.me.clientId,
@@ -235,8 +234,9 @@ def handle_obs_message(raw_msg: str, agent=None, raw_log_path=None) -> str:
 # 5. 主循环
 # =========================
 
-def run_server(host="127.0.0.1", port=9999, agent=None, raw_log_dir=None):
+def run_server(host="127.0.0.1", port=9999, agent=None, raw_log_dir=None, stop_event=None):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
     server.listen(1)
     raw_log_path = None
@@ -248,28 +248,35 @@ def run_server(host="127.0.0.1", port=9999, agent=None, raw_log_dir=None):
     print(f"[Python] Server listening on {host}:{port}")
 
     try:
-        conn, addr = server.accept()
-        print(f"[Python] Client connected from {addr}")
+        while stop_event is None or not stop_event.is_set():
+            print("[Python] Waiting for Unity client...")
+            conn, addr = server.accept()
+            print(f"[Python] Client connected from {addr}")
 
-        with conn:
-            while True:
-                raw_msg = recv_message(conn)
-                if raw_msg is None:
-                    print("[Python] Client disconnected")
-                    break
+            try:
+                with conn:
+                    while True:
+                        raw_msg = recv_message(conn)
+                        if raw_msg is None:
+                            print("[Python] Client disconnected")
+                            break
 
-                print("\n[Python] Received obs (前200字符):")
-                print(raw_msg[:200])
+                        print("\n[Python] Received obs (前200字符):")
+                        print(raw_msg[:200])
 
-                reply = handle_obs_message(raw_msg, agent, raw_log_path=raw_log_path)
+                        reply = handle_obs_message(raw_msg, agent, raw_log_path=raw_log_path)
 
-                print("[Python] Sending action:")
-                print(reply)
+                        print("[Python] Sending action:")
+                        print(reply)
 
-                send_message(conn, reply)
-                raw_msg = None
-                reply = None
-                gc.collect()
+                        send_message(conn, reply)
+                        raw_msg = None
+                        reply = None
+                        gc.collect()
+            except (ConnectionError, OSError) as exc:
+                print(f"[Python] Client connection lost: {exc}")
+            finally:
+                print("[Python] Connection closed; returning to standby")
 
     finally:
         server.close()

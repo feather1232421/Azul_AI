@@ -37,9 +37,11 @@ def compute_softmax_over_legal(policy_logits, legal_moves, temperature=1.0):
     return priors
 
 
-def randomize_hidden_bag_for_search(game):
+def randomize_hidden_bag_for_search(game, seed_rng=None):
     search_game = game.clone_for_search()
-    # Remaining bag composition is inferable, but the order is hidden.
+    # Each determinization needs an independent bag order and continuation RNG.
+    seed_rng = seed_rng if seed_rng is not None else random
+    search_game.public_board.rng = random.Random(seed_rng.getrandbits(64))
     search_game.public_board.rng.shuffle(search_game.public_board.bag)
     return search_game
 
@@ -70,13 +72,21 @@ class MCTSNode:
         self.game = game  # clone过来的AzulGame实例
         self.parent = parent
         self.action = action  # (从哪拿, 颜色, 放哪里)
-        self.player_idx = game.current_player_idx  # add_child之前记录
+        self.player_idx = game.current_player_idx if game is not None else None
         self.prior = prior  # 网络给这个动作的先验概率
 
-        self.untried_actions = self.game.get_legal_moves()  # 你现有的合法动作列表
-        random.shuffle(self.untried_actions)  # 打乱顺序，避免偏差
-
         self.priors = None  # 存整张分布
+
+    def materialize(self):
+        if self.game is not None:
+            return self.game
+        if self.parent is None or self.parent.game is None or self.action is None:
+            raise RuntimeError("Cannot materialize an MCTS node without a materialized parent and action.")
+
+        self.game = self.parent.game.clone_for_search()
+        self.game.play_turn(*self.action)
+        self.player_idx = self.game.current_player_idx
+        return self.game
 
     # def ucb_score(self, C=1.4):
     #     if self.visits == 0:
@@ -113,11 +123,7 @@ class MCTSNode:
     #         return min(self.children, key=lambda c: c.ucb_score(C))
 
     def add_child(self, action, prior):
-        # 这里的 clone 只有在真正需要新节点时才做
-        new_game = self.game.clone_for_search()
-        new_game.play_turn(*action)
-
-        child = MCTSNode(new_game, parent=self, action=action, prior=prior)
+        child = MCTSNode(parent=self, action=action, prior=prior)
         self.children.append(child)
         self.children_actions[action] = child  # 记录动作
         return child
@@ -135,7 +141,6 @@ def release_search_tree(root):
         node.children_actions = {}
         node.parent = None
         node.game = None
-        node.untried_actions = []
         node.priors = None
 
 
@@ -157,6 +162,7 @@ class MCTSAgent:
         debug_log_path=None,
         debug_top_k=8,
         debug_label=None,
+        search_seed=None,
     ):
         self.n_simulations = n_simulations
         self.n_determinizations = max(1, n_determinizations)
@@ -179,6 +185,7 @@ class MCTSAgent:
         self.debug_top_k = debug_top_k
         self.debug_label = debug_label or "mcts"
         self.debug_step = 0
+        self.search_rng = random.Random(search_seed)
 
     def _build_forced_move_result(self, move, mask):
         pi = np.zeros(self.action_dim, dtype=np.float32)
@@ -234,30 +241,32 @@ class MCTSAgent:
     #
     #     return policy_vector, value
 
-    # transformer 版本统一接口
-    def _get_obs_tensor(self, game):
+    def _get_obs_array(self, game):
         state = game.get_observation_current()
-        # 依然调用你之前的 state_to_vector_np，它返回的是 567 维向量
-        obs = game.state_to_vector_np(state)
+        return np.asarray(game.state_to_vector_np(state), dtype=np.float32)
 
-        # 转为 tensor。注意：Transformer 在 forward 里会自己 view 成 [B, N, D]
-        # 所以这里只需要确保它是 [1, 567] 即可
-        return torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+    def _evaluate_batch(self, games):
+        if not games:
+            return (
+                np.empty((0, self.action_dim), dtype=np.float32),
+                np.empty((0, MAX_PLAYERS), dtype=np.float32),
+            )
 
-    # 然后统一 evaluate 函数
-    def _evaluate(self, game):
-        obs = self._get_obs_tensor(game)  # 统一调用
-        with torch.no_grad():
-            # 调用新的 AzulTransformer
+        obs_array = np.stack([self._get_obs_array(game) for game in games])
+        obs = torch.from_numpy(obs_array).to(self.device)
+        with torch.inference_mode():
             policy_logits, value_logit = self.net(obs)
-
             if self.use_value:
-                value = torch.tanh(value_logit).squeeze(0).cpu().numpy()
+                values = torch.tanh(value_logit).cpu().numpy()
             else:
-                value = np.zeros(MAX_PLAYERS, dtype=np.float32)
-            policy_vector = policy_logits.squeeze(0).cpu().numpy()
+                values = np.zeros((len(games), MAX_PLAYERS), dtype=np.float32)
+            policy_vectors = policy_logits.cpu().numpy()
 
-        return policy_vector, value
+        return policy_vectors, values
+
+    def _evaluate(self, game):
+        policy_vectors, values = self._evaluate_batch([game])
+        return policy_vectors[0], values[0]
 
     def _get_priors(self, policy_logits, legal_moves, add_root_noise=False):
         if self.use_policy:
@@ -300,7 +309,9 @@ class MCTSAgent:
         for _ in range(n_simulations):
             node = root
             while node.children and not node.game.is_game_over():
-                node = node.best_child(C=self.puct_c)
+                child = node.best_child(C=self.puct_c)
+                child.materialize()
+                node = child
 
             if node.game.is_game_over():
                 value = self._terminal_value(node)
@@ -314,6 +325,51 @@ class MCTSAgent:
             self._backprop(node, value)
 
         return root
+
+    def _run_batched_searches(self, root_games, simulations_per_root):
+        roots = [MCTSNode(root_game) for root_game in root_games]
+        root_policies, _ = self._evaluate_batch([root.game for root in roots])
+        for root, policy_logits in zip(roots, root_policies):
+            legal_moves = root.game.get_legal_moves()
+            priors = self._get_priors(policy_logits, legal_moves, add_root_noise=True)
+            for action, prior in priors.items():
+                root.add_child(action, prior=prior)
+
+        for simulation_idx in range(max(simulations_per_root, default=0)):
+            pending_nodes = []
+            for root, simulation_count in zip(roots, simulations_per_root):
+                if simulation_idx >= simulation_count:
+                    continue
+
+                node = root
+                while node.children and not node.game.is_game_over():
+                    child = node.best_child(C=self.puct_c)
+                    child.materialize()
+                    node = child
+
+                if node.game.is_game_over():
+                    self._backprop(node, self._terminal_value(node))
+                else:
+                    pending_nodes.append(node)
+
+            if not pending_nodes:
+                continue
+
+            policy_batch, value_batch = self._evaluate_batch(
+                [node.game for node in pending_nodes]
+            )
+            for node, policy_logits, value in zip(
+                pending_nodes,
+                policy_batch,
+                value_batch,
+            ):
+                legal_moves = node.game.get_legal_moves()
+                priors = self._get_priors(policy_logits, legal_moves)
+                for action, prior in priors.items():
+                    node.add_child(action, prior=prior)
+                self._backprop(node, value)
+
+        return roots
 
     def _aggregate_roots(self, roots):
         total_visits = {}
@@ -392,7 +448,7 @@ class MCTSAgent:
         effective_simulations = self._resolve_simulation_budget(len(legal))
 
         self.my_player_idx = game.current_player_idx
-        root = MCTSNode(randomize_hidden_bag_for_search(game))
+        root = MCTSNode(randomize_hidden_bag_for_search(game, self.search_rng))
         # 先对 root 做一次 evaluate + expand
         policy_logits, _ = self._evaluate(root.game)
         legal_moves = root.game.get_legal_moves()
@@ -404,7 +460,9 @@ class MCTSAgent:
             node = root
             # Selection: 一直走到叶子（没有子节点的节点）
             while node.children and not node.game.is_game_over():
-                node = node.best_child(C=self.puct_c)
+                child = node.best_child(C=self.puct_c)
+                child.materialize()
+                node = child
 
             # 到叶子了
             if node.game.is_game_over():
@@ -464,13 +522,16 @@ class MCTSAgent:
         sims_per_world = effective_simulations // n_worlds
         extra = effective_simulations % n_worlds
 
-        roots = []
+        root_games = []
+        simulations_per_root = []
         for world_idx in range(n_worlds):
             sims_this_world = sims_per_world + (1 if world_idx < extra else 0)
             if sims_this_world <= 0:
                 continue
-            root_game = randomize_hidden_bag_for_search(game)
-            roots.append(self._run_single_search(root_game, sims_this_world))
+            root_games.append(randomize_hidden_bag_for_search(game, self.search_rng))
+            simulations_per_root.append(sims_this_world)
+
+        roots = self._run_batched_searches(root_games, simulations_per_root)
 
         total_visits, total_value_sums, total_priors = self._aggregate_roots(roots)
 

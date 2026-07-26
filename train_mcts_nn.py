@@ -334,6 +334,68 @@ def split_loaded_data(raw_data, train_ratio=0.9, seed=42):
     return train_samples, val_samples, 0, 0, "flat"
 
 
+def get_sample_player_count(sample):
+    value_mask = np.asarray(sample[3], dtype=np.float32)
+    player_count = int(np.count_nonzero(value_mask > 0.5))
+    if player_count not in (2, 3, 4):
+        raise ValueError(f"Unsupported player count inferred from value_mask: {value_mask}")
+    return player_count
+
+
+def balance_samples_by_player_count(samples, player_mix_weights, seed=42):
+    weights = {
+        int(player_count): float(weight)
+        for player_count, weight in player_mix_weights.items()
+        if float(weight) > 0
+    }
+    if not weights:
+        raise ValueError("At least one positive player-mix weight is required.")
+    if any(player_count not in (2, 3, 4) for player_count in weights):
+        raise ValueError(f"Player-mix keys must be 2, 3, or 4, got {sorted(weights)}")
+
+    buckets = {player_count: [] for player_count in weights}
+    for sample in samples:
+        player_count = get_sample_player_count(sample)
+        if player_count in buckets:
+            buckets[player_count].append(sample)
+
+    missing = [player_count for player_count, bucket in buckets.items() if not bucket]
+    if missing:
+        raise ValueError(f"No training samples available for requested player counts: {missing}")
+
+    total_weight = sum(weights.values())
+    proportions = {
+        player_count: weight / total_weight
+        for player_count, weight in weights.items()
+    }
+    target_total = min(
+        len(buckets[player_count]) / proportions[player_count]
+        for player_count in weights
+    )
+    target_counts = {
+        player_count: max(1, int(target_total * proportions[player_count]))
+        for player_count in weights
+    }
+
+    rng = random.Random(seed)
+    balanced = []
+    for player_count in sorted(weights):
+        balanced.extend(rng.sample(buckets[player_count], target_counts[player_count]))
+    rng.shuffle(balanced)
+
+    summary = {
+        "available": {
+            player_count: len(buckets[player_count])
+            for player_count in sorted(weights)
+        },
+        "selected": {
+            player_count: target_counts[player_count]
+            for player_count in sorted(weights)
+        },
+    }
+    return balanced, summary
+
+
 def train(
     data_path="azul_data.pkl",
     data_paths=None,
@@ -351,6 +413,7 @@ def train(
     strict_episode_split=False,
     model_type="transformer",
     repeat_data_paths=None,
+    player_mix_weights=None,
 ):
     random.seed(seed)
     np.random.seed(seed)
@@ -410,6 +473,14 @@ def train(
         print("Dataset format: flat samples; using random sample split.")
     else:
         print("Dataset format: empty.")
+
+    if player_mix_weights:
+        train_samples, player_mix_summary = balance_samples_by_player_count(
+            train_samples,
+            player_mix_weights,
+            seed=seed,
+        )
+        print("Balanced training player mix:", player_mix_summary)
 
     train_set = AzulMCTSDataset(train_samples)
     val_set = AzulMCTSDataset(val_samples)

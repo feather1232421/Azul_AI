@@ -316,6 +316,7 @@ if __name__ == "__main__":
             prior_temperature=args.prior_temperature,
             root_dirichlet_alpha=args.dirichlet_alpha,
             root_exploration_fraction=args.root_exploration_fraction,
+            search_seed=args.seed,
         )
         dataset = collect_data(
             agent,
