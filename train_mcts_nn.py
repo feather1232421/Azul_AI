@@ -37,8 +37,12 @@ def convert_legacy_obs_to_current_2p(obs):
     # center
     new_obs[216:222] = obs[120:126]
 
-    me_score = float(obs[343])
-    opp_score = float(obs[561])
+    # The original 567 encoder wrote score before floor:
+    # me score at 301, me floor at 302:344, opponent score at 519, opponent floor at 520:562.
+    # transformer_champion.pt consumed that layout with a historical floor/score slice mismatch,
+    # but the current 1108 encoder should recover the semantic score/floor fields.
+    me_score = float(obs[301])
+    opp_score = float(obs[519])
     me_first = float(obs[562])
     opp_first = float(obs[563])
     opp_delta_vs_me = -float(obs[566])
@@ -55,7 +59,7 @@ def convert_legacy_obs_to_current_2p(obs):
     ptr += 25
     new_obs[ptr:ptr + 150] = obs[151:301]
     ptr += 150
-    new_obs[ptr:ptr + 42] = obs[301:343]
+    new_obs[ptr:ptr + 42] = obs[302:344]
     ptr += 42
 
     # opponent block
@@ -68,7 +72,7 @@ def convert_legacy_obs_to_current_2p(obs):
     ptr += 25
     new_obs[ptr:ptr + 150] = obs[369:519]
     ptr += 150
-    new_obs[ptr:ptr + 42] = obs[519:561]
+    new_obs[ptr:ptr + 42] = obs[520:562]
     ptr += 42
 
     # two padded player slots remain zero-filled
@@ -168,6 +172,76 @@ def load_raw_data(data_path=None, data_paths=None, repeat_data_paths=None):
         merged_raw_data.extend(normalize_loaded_data(raw_data))
 
     return merged_raw_data, paths
+
+
+def load_and_split_data(
+    data_path=None,
+    data_paths=None,
+    repeat_data_paths=None,
+    train_ratio=0.9,
+    seed=42,
+):
+    path_repeat_counts = {}
+
+    def add_path(path, count=1):
+        path = Path(path)
+        if path not in path_repeat_counts:
+            path_repeat_counts[path] = 0
+        path_repeat_counts[path] += int(count)
+
+    if data_path is not None:
+        add_path(data_path)
+    if data_paths is not None:
+        for path in data_paths:
+            add_path(path)
+    if repeat_data_paths is not None:
+        for path, repeat in repeat_data_paths:
+            if int(repeat) < 0:
+                raise ValueError(f"Repeat count must be non-negative: {path} x{repeat}")
+            add_path(path, repeat)
+
+    if not path_repeat_counts:
+        raise ValueError("At least one data path is required.")
+
+    all_train_samples = []
+    all_val_samples = []
+    dataset_summaries = []
+
+    for path_index, (path, repeat_count) in enumerate(path_repeat_counts.items()):
+        with path.open("rb") as f:
+            raw_data = normalize_loaded_data(pickle.load(f))
+
+        train_samples, val_samples, train_episodes, val_episodes, split_mode = split_loaded_data(
+            raw_data,
+            train_ratio=train_ratio,
+            seed=seed + path_index,
+        )
+
+        # Repeats are training weights. Validation keeps one independent copy.
+        for _ in range(repeat_count):
+            all_train_samples.extend(train_samples)
+        all_val_samples.extend(val_samples)
+
+        dataset_summaries.append({
+            "path": path,
+            "repeat_count": repeat_count,
+            "split_mode": split_mode,
+            "train_samples": len(train_samples),
+            "val_samples": len(val_samples),
+            "weighted_train_samples": len(train_samples) * repeat_count,
+            "train_episodes": train_episodes,
+            "val_episodes": val_episodes,
+        })
+
+    split_modes = {summary["split_mode"] for summary in dataset_summaries}
+    split_mode = next(iter(split_modes)) if len(split_modes) == 1 else "mixed"
+    return (
+        all_train_samples,
+        all_val_samples,
+        dataset_summaries,
+        list(path_repeat_counts),
+        split_mode,
+    )
 
 
 @torch.no_grad()
@@ -285,28 +359,40 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    raw_data, loaded_paths = load_raw_data(
+    (
+        train_samples,
+        val_samples,
+        dataset_summaries,
+        loaded_paths,
+        split_mode,
+    ) = load_and_split_data(
         data_path=data_path,
         data_paths=data_paths,
         repeat_data_paths=repeat_data_paths,
-    )
-
-    train_samples, val_samples, train_episodes, val_episodes, split_mode = split_loaded_data(
-        raw_data,
         train_ratio=train_ratio,
         seed=seed,
     )
 
-    if strict_episode_split and split_mode != "episode":
+    non_episode_paths = [
+        str(summary["path"])
+        for summary in dataset_summaries
+        if summary["split_mode"] != "episode"
+    ]
+    if strict_episode_split and non_episode_paths:
         raise ValueError(
-            "Strict episode split requested, but loaded data is not stored by episode. "
-            "Regenerate replay data with by_episode=True."
+            "Strict episode split requested, but these datasets are not stored by episode: "
+            f"{non_episode_paths}. Regenerate them with by_episode=True."
         )
 
-    print("Loaded data files:")
-    for path in loaded_paths:
-        print(f" - {path}")
-    print(f"Loaded top-level entries: {len(raw_data)}")
+    print("Loaded and split data files:")
+    for summary in dataset_summaries:
+        print(
+            f" - {summary['path']} x{summary['repeat_count']}: "
+            f"mode={summary['split_mode']}, "
+            f"train={summary['train_samples']} "
+            f"(weighted={summary['weighted_train_samples']}), "
+            f"val={summary['val_samples']}"
+        )
     print(
         "Loss weights:",
         {
@@ -315,7 +401,11 @@ def train(
         },
     )
     if split_mode == "episode":
+        train_episodes = sum(summary["train_episodes"] for summary in dataset_summaries)
+        val_episodes = sum(summary["val_episodes"] for summary in dataset_summaries)
         print(f"Episode split: train={train_episodes}, val={val_episodes}")
+    elif split_mode == "mixed":
+        print("Dataset formats: mixed flat samples and episode-grouped data; split each file independently.")
     elif split_mode == "flat":
         print("Dataset format: flat samples; using random sample split.")
     else:

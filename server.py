@@ -221,7 +221,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="models/transformer_multiplayer_base.pt")
+    parser.add_argument("--model", type=str, default="models/transformer_action300_legacy2p_distill_last.pt")
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9999)
     parser.add_argument("--n-simulations", type=int, default=1000)
