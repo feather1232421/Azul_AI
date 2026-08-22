@@ -1,6 +1,9 @@
 import argparse
+import atexit
+import ctypes
 import pickle
 import random
+import sys
 
 import numpy as np
 import torch
@@ -20,6 +23,18 @@ DEFAULT_TEMPERATURE_SCHEDULE = (
 )
 
 DEFAULT_PLAYER_MIX = "2:1.0"
+
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+def set_system_sleep_blocked(blocked):
+    if sys.platform != "win32":
+        return False
+
+    flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED if blocked else ES_CONTINUOUS
+    result = ctypes.windll.kernel32.SetThreadExecutionState(flags)
+    return result != 0
 
 
 def build_action_mask(game):
@@ -282,7 +297,20 @@ if __name__ == "__main__":
         help="Comma-separated players:weight mix for self-play games, e.g. 2:0.8,3:0.1,4:0.1.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--allow-sleep",
+        action="store_true",
+        help="Allow Windows to sleep during data generation. By default only system sleep is blocked; the display may still turn off.",
+    )
     args = parser.parse_args()
+
+    if not args.allow_sleep and sys.platform == "win32":
+        if set_system_sleep_blocked(True):
+            atexit.register(set_system_sleep_blocked, False)
+            print("Windows sleep blocked for this run; display timeout remains enabled.")
+        else:
+            print("Warning: failed to block Windows sleep for this run.")
+
     temperature_schedule = parse_temperature_schedule(args.temperature_schedule)
 
     if args.mode == "greedy":

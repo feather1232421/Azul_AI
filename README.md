@@ -2,9 +2,10 @@
 
 本项目目标实现一个结合 **蒙特卡洛树搜索 (MCTS)** 与 **深度神经网络 (Policy-Value Network)** 的自博弈 AI，且AI能够自主学习并超越人类/启发式搜索水平。
 
-## 📌 当前状态（2026-06）
+## 📌 当前状态（2026-08）
 - 当前主线为 **Transformer Policy-Value Network + MCTS**。
-- `server.py` 当前默认尝试加载本地 `models/transformer_multiplayer_base.pt`；该 checkpoint 是基于旧 2P champion partial warm-start 到新多人结构后的起始权重。
+- 当前通用 2P/3P/4P checkpoint 为 `models/transformer_action300_mixed_round5_211.pt`，稳定别名为 `models/transformer_action300_multiplayer_champion.pt`。
+- `server.py` 启动时按修改时间从新到旧列出 `models/*.pt`，由用户选择；可用 `--model` 显式指定并跳过菜单。
 - 已建立人工审核的 curated cases，用于回归检查关键妙手/错手局面；当前 `check_curated_cases.py` 结果为 `2/3`。
 - MCTS 小分支预算已针对实战配置做过一轮调整：当合法步较少时，会给出更高搜索预算，避免残局被过度截断。
 - 当前建议：继续沿着 **self-play -> 训练新模型 -> arena 对比 -> 真人对战补 case** 的闭环迭代，而不是回退到 PPO 路线。
@@ -45,7 +46,8 @@
 - **State Representation**:
   - 旧版特征为 142 维。
   - PPO 路线使用 `state_to_vector_new()`，输入维度为 **562**。
-  - 当前 MCTS + NN 主线路线使用 `state_to_vector_np()`，输入维度为 **567**。
+  - 旧版原生 2P champion 使用 **567 observation / 180 action / scalar zero-sum value**，通过独立 legacy runner 保留。
+  - 当前多人 Transformer 主线使用 **1108 observation / 300 action / 4-player value vector**，由合法动作 mask 兼容 2P、3P 和 4P。
   - 包含：工厂状态（Factories）、中心区统计（Center）、玩家墙面（Wall）、模式行（Pattern Lines）、分数与地板惩罚。
   - 特点：消除颜色与位置的伪线性关系，增强模型对非线性决策空间的感知。
 
@@ -93,17 +95,17 @@ python get_dataset.py --mode mcts --games 300 --output mcts_v4_selfplay.pkl --si
 ```bash
 python battle.py
 ```
-- 与Unity互动（上方链接提供的仓库）：
-  - 默认使用 transformer champion，直接运行：
+- 与 Unity 互动（上方链接提供的仓库）：
+  - 启动后从 `models` 目录选择 checkpoint：
 ```bash
 python server.py
 ```
 ## Transformer 主线（2026-05 / 2026-06）
 
-本地主线默认模型路径：
+当前通用模型路径：
 
 ```bash
-models/transformer_multiplayer_base.pt
+models/transformer_action300_mixed_round5_211.pt
 ```
 
 执行一轮 self-play -> train -> arena：
@@ -139,8 +141,8 @@ python run_iteration.py --curated-data-paths artifacts/curated_positions/curated
 
 当前补充说明：
 
-- 当前 `server.py` 默认模型路径：`models/transformer_multiplayer_base.pt`
-- 当前仓库暂未提供模型权重文件；如需复现实验，需要自行准备本地 checkpoint
+- 当前 `server.py` 没有硬编码默认模型；交互模式下直接回车会选择修改时间最新的 checkpoint
+- CPU 服务/打包环境为 `azul_pack_clean`，CUDA 训练和 self-play 环境为 `pytorch`
 - curated cases 当前通过数：`2/3`
 - curated dataset 已可导出到 `artifacts/curated_positions/`，可通过 `--curated-data-paths` 可选并入当前训练流程
 

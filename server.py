@@ -31,8 +31,62 @@ def resource_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def model_path(filename: str) -> str:
-    return os.path.join(resource_dir(), filename)
+def resolve_relative_path(path_value) -> Path:
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+
+    packaged_path = Path(resource_dir()) / path
+    if packaged_path.exists():
+        return packaged_path
+    return Path.cwd() / path
+
+
+def list_model_files(model_dir="models"):
+    directory = resolve_relative_path(model_dir)
+    if not directory.is_dir():
+        return []
+    return sorted(
+        directory.glob("*.pt"),
+        key=lambda path: (path.stat().st_mtime, path.name.lower()),
+        reverse=True,
+    )
+
+
+def choose_model_file(model_dir="models", input_func=input):
+    models = list_model_files(model_dir)
+    if not models:
+        directory = resolve_relative_path(model_dir)
+        raise FileNotFoundError(f"No .pt models found in {directory}")
+
+    print(f"[Python] Models in {models[0].parent} (newest first):")
+    for index, path in enumerate(models, start=1):
+        modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  [{index}] {path.name}  ({modified})")
+
+    while True:
+        try:
+            selection = input_func("Select model [1]: ").strip()
+        except EOFError as exc:
+            raise RuntimeError(
+                "Model selection requires an interactive console; use --model PATH for unattended startup."
+            ) from exc
+
+        if selection == "":
+            return models[0]
+        if selection.isdigit() and 1 <= int(selection) <= len(models):
+            return models[int(selection) - 1]
+        print(f"Enter a number from 1 to {len(models)}, or press Enter for the newest model.")
+
+
+def select_model_path(explicit_model=None, model_dir="models", input_func=input):
+    if explicit_model is None:
+        return choose_model_file(model_dir=model_dir, input_func=input_func)
+
+    path = resolve_relative_path(explicit_model)
+    if not path.is_file():
+        raise FileNotFoundError(f"Model not found: {path}")
+    return path
 
 # =========================
 # 1. 网络基础
@@ -291,7 +345,18 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="models/transformer_action300_legacy2p_distill_last.pt")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model checkpoint path. Omit to choose interactively from --model-dir.",
+    )
+    parser.add_argument(
+        "--model-dir",
+        type=str,
+        default="models",
+        help="Directory scanned for .pt models when --model is omitted.",
+    )
     parser.add_argument("--host", type=str, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9999)
     parser.add_argument("--n-simulations", type=int, default=1000)
@@ -303,15 +368,16 @@ if __name__ == "__main__":
     parser.add_argument("--no-value", action="store_true")
     args = parser.parse_args()
 
+    selected_model = select_model_path(args.model, model_dir=args.model_dir)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net, _, resolved_model_type, _ = load_model(
-        model_path(args.model),
+        selected_model,
         device=device,
         obs_dim=TRANSFORMER_OBS_DIM,
         action_dim=ACTION_DIM,
         allow_partial_load=True,
     )
-    print(f"[Python] Loaded {args.model} as {resolved_model_type}")
+    print(f"[Python] Loaded {selected_model} as {resolved_model_type}")
     model_0 = MCTSAgent(
         n_simulations=args.n_simulations,
         n_determinizations=args.n_determinizations,
